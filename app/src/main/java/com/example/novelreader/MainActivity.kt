@@ -138,10 +138,7 @@ private fun NovelApp() {
     // 第13批：续读页意图——(章节 url → 退出时页号)。只在「从书架/详情续读」时设置，
     // 普通点章会被 loadChapter 清掉；ReaderScreen 按它归位，所以进度能精确到页。
     var resumeTarget by remember { mutableStateOf<Pair<String, Int>?>(null) }
-    // 第13批：目录正序/倒序开关提升到顶层。原先放在 TocScreen 内部，
-    // 一旦 TocScreen 被重组重建（它在 when 里有两个调用点），remember 状态就丢，
-    // 表现为「点一下闪一下又回到正序」。
-    var tocDesc by remember { mutableStateOf(false) }
+    // 第14批：目录正/倒序开关已取消，改为右上角 ↓/↑ 一键跳末章/首章（无持久状态）。
 
     // 正文章节缓存（第 6 条）：点进阅读后台预取后续章节，翻页命中即秒开
     val contentCache = remember {
@@ -396,12 +393,15 @@ private fun NovelApp() {
 
     // 书架条目 → 还原成 Book 并直接续读到上次那一章
     val openFromShelf: (Book, ShelfEntry) -> Unit = { book, entry ->
+        // 第14批：书架列表里的 entry 可能是旧快照（章内翻页只落盘、未回灌 UI），
+        // 续读前从仓库内存源直取最新进度，避免「章节对、页数错」。
+        val fresh = ShelfRepository.find(context, book.bookUrl, entry.sourceUrl) ?: entry
         detailBook = book
         showDetail = false
         currentBook = book
         chapters = emptyList()
         tocError = null
-        lastChapterUrl = entry.lastReadChapterUrl
+        lastChapterUrl = fresh.lastReadChapterUrl
         showReaderToc = false
         loadingToc = true
         scope.launch {
@@ -422,11 +422,11 @@ private fun NovelApp() {
                 tocError = "目录解析为空（书源规则不匹配或网络失败）"
             } else {
                 // 第12批：同上——URL 命中优先，落盘序号兜底，最后才是第一章。
-                val target = list.firstOrNull { it.url == entry.lastReadChapterUrl }
-                    ?: entry.lastReadChapterIndex.takeIf { it in list.indices }?.let { list[it] }
+                val target = list.firstOrNull { it.url == fresh.lastReadChapterUrl }
+                    ?: fresh.lastReadChapterIndex.takeIf { it in list.indices }?.let { list[it] }
                     ?: list.first()
                 // 第13批：把落盘的页号带进续读章，ReaderScreen 归位到退出那一页。
-                resumeTarget = target.url to entry.lastReadPage
+                resumeTarget = target.url to fresh.lastReadPage
                 loadChapter(target)
             }
         }
@@ -449,6 +449,8 @@ private fun NovelApp() {
                 if (b != null && src != null && page > 0) {
                     scope.launch(Dispatchers.IO) {
                         runCatching { ShelfRepository.updateProgress(context, b.bookUrl, src.bookSourceUrl, openChapter, page) }
+                        // 第14批：页号落盘后回灌书架内存快照，否则返回书架拿到的仍是旧页号。
+                        withContext(Dispatchers.Main) { refreshShelf() }
                     }
                 }
             },
@@ -467,8 +469,6 @@ private fun NovelApp() {
                 resumeTarget = null
                 loadChapter(ch)
             },
-            desc = tocDesc,
-            onToggleDesc = { tocDesc = !tocDesc },
             cachedUrls = remember(cacheTick) { contentCache.keys.toSet() },
         )
 
@@ -515,8 +515,6 @@ private fun NovelApp() {
                 resumeTarget = null
                 loadChapter(ch)
             },
-            desc = tocDesc,
-            onToggleDesc = { tocDesc = !tocDesc },
             cachedUrls = remember(cacheTick) { contentCache.keys.toSet() },
         )
 
@@ -753,22 +751,20 @@ private fun TocScreen(
     error: String?,
     onBack: () -> Unit,
     onOpen: (BookChapter) -> Unit,
-    desc: Boolean = false,
-    onToggleDesc: () -> Unit = {},
     cachedUrls: Set<String> = emptySet(),
 ) {
     var query by remember { mutableStateOf("") }
-    // 第13批：正序 / 倒序开关已提升到 NovelApp 顶层（desc 参数），
-    // TocScreen 即使被重组重建也不会丢掉这个状态。
     
-    val filtered = remember(query, chapters, desc) {
-        val base = if (desc) chapters.reversed() else chapters
-        if (query.isBlank()) base else base.filter { it.title.contains(query, ignoreCase = true) }
+    // 第14批：取消正倒序，右上角 ↓/↑ 一键跳末章/首章。
+    val filtered = remember(query, chapters) {
+        if (query.isBlank()) chapters else chapters.filter { it.title.contains(query, ignoreCase = true) }
     }
     val listState = rememberLazyListState()
-
+    // 第14批：↓/↑ 跳转用——协程作用域 + 方向态（默认 ↓ 跳末章）。
+    val scrollScope = rememberCoroutineScope()
+    var jumpToEnd by remember { mutableStateOf(true) }
     // 进入目录时自动滚到最近阅读的章节
-    LaunchedEffect(currentChapterUrl, filtered, desc) {
+    LaunchedEffect(currentChapterUrl, filtered) {
         if (query.isBlank()) {
             val i = filtered.indexOfFirst { it.url == currentChapterUrl }
             if (i >= 0) listState.scrollToItem(i)
@@ -787,15 +783,21 @@ private fun TocScreen(
                 book.author.takeIf { it.isNotBlank() },
                 if (chapters.isNotEmpty()) "共 ${chapters.size} 章" else null,
             ).joinToString(" · ").ifBlank { null },
-            // 第12批：右上角正序 / 倒序切换
+            // 第14批：右上角 ↓ / ↑ ——点一下跳末章，再点一下回首章。
             trailing = {
                 Text(
-                    text = if (desc) "倒序 ↓" else "正序 ↑",
-                    style = MaterialTheme.typography.labelLarge,
+                    text = if (jumpToEnd) "↓" else "↑",
+                    style = MaterialTheme.typography.titleLarge,
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier
                         .clip(RoundedCornerShape(10.dp))
-                        .clickable { onToggleDesc() }
+                        .clickable {
+                            if (filtered.isNotEmpty()) {
+                                val target = if (jumpToEnd) filtered.lastIndex else 0
+                                scrollScope.launch { listState.animateScrollToItem(target) }
+                            }
+                            jumpToEnd = !jumpToEnd
+                        }
                         .padding(horizontal = 10.dp, vertical = 6.dp),
                 )
             },
