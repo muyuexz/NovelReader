@@ -1,5 +1,6 @@
 package com.example.novelreader
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -14,13 +15,16 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
@@ -44,6 +48,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.novelreader.analyzeRule.BookSource
+import com.example.novelreader.analyzeRule.RuleBookInfo
+import com.example.novelreader.analyzeRule.RuleContent
+import com.example.novelreader.analyzeRule.RuleSearch
+import com.example.novelreader.analyzeRule.RuleToc
 import com.example.novelreader.ui.AppHeader
 import com.example.novelreader.ui.CountBadge
 import com.example.novelreader.ui.PillChip
@@ -63,7 +71,7 @@ fun SourceManagerScreen(
     onBack: () -> Unit,
     onImportText: (String) -> Unit,
     onImportNetwork: (String) -> Unit,
-    onAddSource: (String, String, String?) -> Unit,
+    onAddSource: (BookSource) -> Unit,
     onDelete: (Set<String>) -> Unit,
     onToggle: (String, Boolean) -> Unit,
     onClearNotice: () -> Unit,
@@ -298,37 +306,61 @@ fun SourceManagerScreen(
         var newName by remember { mutableStateOf("") }
         var newUrl by remember { mutableStateOf("") }
         var newGroup by remember { mutableStateOf("") }
+        var showRules by remember { mutableStateOf(false) }
+        var sSearchUrl by remember { mutableStateOf("") }
+        var rBookList by remember { mutableStateOf("") }
+        var rName by remember { mutableStateOf("") }
+        var rAuthor by remember { mutableStateOf("") }
+        var rCover by remember { mutableStateOf("") }
+        var rBookUrl by remember { mutableStateOf("") }
+        var iInit by remember { mutableStateOf("") }
+        var iIntro by remember { mutableStateOf("") }
+        var iTocUrl by remember { mutableStateOf("") }
+        var tList by remember { mutableStateOf("") }
+        var tName by remember { mutableStateOf("") }
+        var tUrl by remember { mutableStateOf("") }
+        var cContent by remember { mutableStateOf("") }
+        var cReplace by remember { mutableStateOf("") }
         AlertDialog(
             onDismissRequest = { showNewDialog = false },
             title = { Text("新建书源") },
             text = {
-                Column {
-                    OutlinedTextField(
-                        value = newName,
-                        onValueChange = { newName = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        placeholder = { Text("书源名称（必填）") },
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = newUrl,
-                        onValueChange = { newUrl = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        placeholder = { Text("书源地址 URL（必填）") },
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = newGroup,
-                        onValueChange = { newGroup = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        placeholder = { Text("分组（可选）") },
-                    )
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 420.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    RuleField("书源名称（必填）", newName) { newName = it }
+                    RuleField("书源地址 URL（必填）", newUrl) { newUrl = it }
+                    RuleField("分组（可选）", newGroup) { newGroup = it }
+                    TextButton(onClick = { showRules = !showRules }) {
+                        Text(if (showRules) "收起解析规则 ▲" else "展开解析规则（进阶） ▼")
+                    }
+                    AnimatedVisibility(visible = showRules) {
+                        Column {
+                            RuleSection("搜索规则（搜索结果页怎么解析）")
+                            RuleField("搜索地址 searchUrl（关键词用 {{key}}）", sSearchUrl) { sSearchUrl = it }
+                            RuleField("列表规则 bookList（如 .result li）", rBookList) { rBookList = it }
+                            RuleField("书名规则 name（如 h3 a@text）", rName) { rName = it }
+                            RuleField("作者规则 author", rAuthor) { rAuthor = it }
+                            RuleField("封面规则 coverUrl（如 img@src）", rCover) { rCover = it }
+                            RuleField("详情链接规则 bookUrl（如 h3 a@href）", rBookUrl) { rBookUrl = it }
+                            RuleSection("详情规则（书籍信息页）")
+                            RuleField("预处理 init（可空，JS 或规则）", iInit) { iInit = it }
+                            RuleField("简介规则 intro（如 #intro@text）", iIntro) { iIntro = it }
+                            RuleField("目录链接规则 tocUrl（可空，与详情页不同时填）", iTocUrl) { iTocUrl = it }
+                            RuleSection("目录规则（章节列表页）")
+                            RuleField("章节列表 chapterList（如 #list dd）", tList) { tList = it }
+                            RuleField("章节名 chapterName（如 a@text）", tName) { tName = it }
+                            RuleField("章节链接 chapterUrl（如 a@href）", tUrl) { tUrl = it }
+                            RuleSection("正文规则（章节内容页）")
+                            RuleField("正文规则 content（如 #content@text）", cContent) { cContent = it }
+                            RuleField("正文替换 replaceRegex（可空，如去空白与换行）", cReplace) { cReplace = it }
+                        }
+                    }
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        text = "提示：新建的源只含占位信息，规则字段为空；要能搜到书，还需在源 JSON 里补全搜索/目录/正文规则。",
+                        text = "提示：规则语法与 Legado 书源一致，搜索地址里的关键词用 {{key}} 占位；只有填了对应规则，才能解析出对应内容。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -339,7 +371,35 @@ fun SourceManagerScreen(
                     onClick = {
                         if (newName.isNotBlank() && newUrl.isNotBlank()) {
                             showNewDialog = false
-                            onAddSource(newName, newUrl, newGroup)
+                            onAddSource(
+                                BookSource(
+                                    bookSourceUrl = newUrl.trim(),
+                                    bookSourceName = newName.trim(),
+                                    bookSourceGroup = newGroup.trim().ifBlank { null },
+                                    searchUrl = sSearchUrl.trim().ifBlank { null },
+                                    ruleSearch = RuleSearch(
+                                        bookList = rBookList.trim().ifBlank { null },
+                                        name = rName.trim().ifBlank { null },
+                                        author = rAuthor.trim().ifBlank { null },
+                                        coverUrl = rCover.trim().ifBlank { null },
+                                        bookUrl = rBookUrl.trim().ifBlank { null },
+                                    ),
+                                    ruleBookInfo = RuleBookInfo(
+                                        init = iInit.trim().ifBlank { null },
+                                        intro = iIntro.trim().ifBlank { null },
+                                        tocUrl = iTocUrl.trim().ifBlank { null },
+                                    ),
+                                    ruleToc = RuleToc(
+                                        chapterList = tList.trim().ifBlank { null },
+                                        chapterName = tName.trim().ifBlank { null },
+                                        chapterUrl = tUrl.trim().ifBlank { null },
+                                    ),
+                                    ruleContent = RuleContent(
+                                        content = cContent.trim().ifBlank { null },
+                                        replaceRegex = cReplace.trim().ifBlank { null },
+                                    ),
+                                )
+                            )
                         }
                     },
                     enabled = newName.isNotBlank() && newUrl.isNotBlank(),
@@ -410,4 +470,33 @@ private fun SourceRow(
             )
         }
     }
+}
+
+
+/** 第36批：规则输入行（用 placeholder 当字段名，省 label 占高）。 */
+@Composable
+private fun RuleField(
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+        placeholder = { Text(label, fontSize = 13.sp) },
+    )
+    Spacer(Modifier.height(6.dp))
+}
+
+/** 第36批：规则分区小标题。 */
+@Composable
+private fun RuleSection(title: String) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.primary,
+    )
+    Spacer(Modifier.height(4.dp))
 }

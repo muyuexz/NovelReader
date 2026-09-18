@@ -761,16 +761,11 @@ private fun NovelApp(
                                 sourceNotice = msg
                             }
                         },
-                        onAddSource = { name, url, group ->
+                        onAddSource = { src ->
                             scope.launch {
                                 val msg = withContext(Dispatchers.IO) {
-                                    val src = BookSource(
-                                        bookSourceUrl = url.trim(),
-                                        bookSourceName = name.trim(),
-                                        bookSourceGroup = group?.trim()?.ifBlank { null },
-                                    )
                                     val added = SourceRepository.import(context, listOf(src))
-                                    if (added > 0) "已新建书源：${name.trim()}" else "已存在相同书源，未新增"
+                                    if (added > 0) "已新建书源：${src.bookSourceName}" else "已存在相同书源，未新增"
                                 }
                                 refreshSources()
                                 sourceNotice = msg
