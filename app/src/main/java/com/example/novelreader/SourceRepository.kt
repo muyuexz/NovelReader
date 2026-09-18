@@ -287,10 +287,14 @@ object SourceRepository {
             val k = s.getKey()
             val i = index[k]
             if (i == null) {
+                // 第22批：新导入的书源默认启用——导入即可用，不必再去点开关。
+                s.enabled = true
                 index[k] = merged.size
                 merged.add(s)
                 added++
             } else {
+                // 第22批：同键书源只刷新规则，保留用户对该源的启停选择。
+                s.enabled = merged[i].enabled
                 merged[i] = s
             }
         }

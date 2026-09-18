@@ -27,6 +27,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -306,18 +307,23 @@ private fun SourceRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        Text(
-            text = if (enabled) "启用" else "停用",
-            fontSize = 13.sp,
-            color = if (enabled) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            },
-            modifier = Modifier
-                .clip(RoundedCornerShape(50))
-                .clickable { onToggleEnabled(!enabled) }
-                .padding(horizontal = 10.dp, vertical = 6.dp),
-        )
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(start = 2.dp),
+        ) {
+            Switch(
+                checked = enabled,
+                onCheckedChange = { onToggleEnabled(it) },
+            )
+            Text(
+                text = if (enabled) "已启用" else "已停用",
+                fontSize = 11.sp,
+                color = if (enabled) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
+        }
     }
 }

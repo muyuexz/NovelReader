@@ -33,6 +33,9 @@ object BookSourceEngine {
     /** 目录页：交互主路径，最敏感，8s 拿不到就放弃。 */
     private const val TIMEOUT_TOC = 8_000L
 
+    /** 第22批：目录分页上限，防 nextTocUrl 自环或书源规则写错导致死循环。 */
+    private const val MAX_TOC_PAGES = 60
+
     /** 正文页：内容大，且可能带分页，放宽到 15s。 */
     private const val TIMEOUT_CONTENT = 15_000L
 
@@ -133,47 +136,77 @@ object BookSourceEngine {
     // ── 目录 ──────────────────────────────────────────────────────────────
 
     /** 目录页：解析章节列表，章节地址绝对化。 */
+    /**
+     * 目录页：解析章节列表，章节地址绝对化。
+     *
+     * 第 22 批增强：
+     * 1. `nextTocUrl` 分页——不少书源目录分页，原先只取第一页，章节数天然偏少；
+     *    现在按 `nextTocUrl` 逐页翻，最多 [MAX_TOC_PAGES] 页，访问过的页面去重防自环。
+     * 2. 章条归一化——按 chapterUrl 跨页 / 页内去重，剔除「返回目录 / 上一章 / 下一章」这类纯导航项。
+     * 3. index 按入列位置重排，保证目录序号连续（供进度序号与阅读页显示）。
+     */
     fun getChapterList(source: BookSource, book: Book): List<BookChapter> {
         val rt = source.ruleToc ?: return emptyList()
         val chapterListRule = rt.chapterList?.takeIf { it.isNotBlank() } ?: return emptyList()
         val chapterNameRule = rt.chapterName?.takeIf { it.isNotBlank() } ?: return emptyList()
 
         return runCatching {
-            val tocUrl = book.tocUrl.ifBlank { book.bookUrl }
-            val analyzeUrl = AnalyzeUrlCore(
-                rawUrl = tocUrl,
-                baseUrl = book.bookUrl,
-                source = source,
-                ruleData = book,
-                readTimeout = TIMEOUT_TOC,
-                callTimeout = TIMEOUT_TOC + 2_000,
-            )
-            val resp = analyzeUrl.getStrResponse()
-            val body = resp.body ?: return emptyList()
+            val chapters = ArrayList<BookChapter>()
+            val seenUrl = HashSet<String>()
+            val visitedPages = HashSet<String>()
+            var pageUrl = book.tocUrl.ifBlank { book.bookUrl }
+            var page = 0
 
-            val rule = AnalyzeRuleCore(ruleData = book, source = source).setContent(body, resp.url)
-            rt.preUpdateJs?.takeIf { it.isNotBlank() }?.let { rule.evalJS(it) }
+            while (pageUrl.isNotBlank() && page < MAX_TOC_PAGES && visitedPages.add(pageUrl)) {
+                val analyzeUrl = AnalyzeUrlCore(
+                    rawUrl = pageUrl,
+                    baseUrl = book.bookUrl,
+                    source = source,
+                    ruleData = book,
+                    readTimeout = TIMEOUT_TOC,
+                    callTimeout = TIMEOUT_TOC + 2_000,
+                )
+                val resp = analyzeUrl.getStrResponse()
+                val body = resp.body ?: break
 
-            val elements = rule.getElements(chapterListRule)
-            val chapters = ArrayList<BookChapter>(elements.size)
-            for (element in elements) {
-                rule.setContent(element)
-                // 第12批：index 取真实入列位置。原先用 elements 的循环下标，
-                // 被下面的 continue 跳过空条目后会与章节真实序号错位，进度序号也跟着存错。
-                val chapter = BookChapter(bookUrl = book.bookUrl, index = chapters.size)
-                chapter.title = rule.getString(chapterNameRule).trim()
-                chapter.url = rule.getString(rt.chapterUrl, null, true)
-                if (chapter.title.isBlank() || chapter.url.isBlank()) continue
-                rule.getString(rt.isVip).takeIf { it.isNotBlank() }?.let {
-                    chapter.isVip = it != "0" && it != "false"
+                val rule = AnalyzeRuleCore(ruleData = book, source = source).setContent(body, resp.url)
+                if (page == 0) rt.preUpdateJs?.takeIf { it.isNotBlank() }?.let { rule.evalJS(it) }
+
+                val elements = rule.getElements(chapterListRule)
+                for (element in elements) {
+                    rule.setContent(element)
+                    val title = rule.getString(chapterNameRule).trim()
+                    val url = rule.getString(rt.chapterUrl, null, true)
+                    if (title.isBlank() || url.isBlank()) continue
+                    // 第22批：纯导航项不算章节。
+                    if (ChapterStats.isNavTitle(title)) continue
+                    // 第22批：同一 URL 只收一次（跨页重复 / 页内重复 / 预读块）。
+                    if (!seenUrl.add(url)) continue
+
+                    // index 取真实入列位置（第12批语义）：空条目 / 导航项 / 重复项都不占号。
+                    val chapter = BookChapter(bookUrl = book.bookUrl, index = chapters.size)
+                    chapter.title = title
+                    chapter.url = url
+                    rule.getString(rt.isVip).takeIf { it.isNotBlank() }?.let {
+                        chapter.isVip = it != "0" && it != "false"
+                    }
+                    chapter.updateTime = parseUpdateTime(rule.getString(rt.updateTime))
+                    chapters += chapter
                 }
-                chapter.updateTime = parseUpdateTime(rule.getString(rt.updateTime))
-                chapters += chapter
+
+                // 读完本章条目后把规则上下文切回「整页」，否则 nextTocUrl 会在最后一个元素上求值。
+                rule.setContent(body, resp.url)
+                val nextRaw = rule.getString(rt.nextTocUrl, null, true)
+                pageUrl = nextRaw
+                    .split('\n', '\r', ',', '，', ' ', '\t')
+                    .map { it.trim() }
+                    .firstOrNull { it.isNotBlank() && it !in visitedPages && it != resp.url }
+                    ?: ""
+                page++
             }
             chapters
         }.getOrDefault(emptyList())
     }
-
     // ── 正文 ──────────────────────────────────────────────────────────────
 
     /**

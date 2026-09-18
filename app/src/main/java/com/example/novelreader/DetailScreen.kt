@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.novelreader.analyzeRule.Book
 import com.example.novelreader.analyzeRule.BookChapter
+import com.example.novelreader.analyzeRule.ChapterStats
 import com.example.novelreader.ui.AppHeader
 import com.example.novelreader.ui.TagPill
 import coil.compose.SubcomposeAsyncImage
@@ -74,7 +75,7 @@ fun DetailScreen(
         sanitizeKind(book.kind).ifEmpty { inferKind(book.name, intro, book.lastChapter) }
     }
     val chapterText = when {
-        chapters.isNotEmpty() -> "${chapters.size}"
+        chapters.isNotEmpty() -> "${ChapterStats.realChapterCount(chapters)}"
         loading -> "…"
         else -> "—"
     }

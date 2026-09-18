@@ -61,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.novelreader.analyzeRule.Book
 import com.example.novelreader.analyzeRule.BookChapter
+import com.example.novelreader.analyzeRule.ChapterStats
 import com.example.novelreader.analyzeRule.BookSource
 import com.example.novelreader.analyzeRule.BookSourceParser
 import com.example.novelreader.analyzeRule.Network
@@ -209,8 +210,8 @@ private fun NovelApp() {
             if (list.isNotEmpty()) {
                 // 目录抓全后回填真实章节数与最新章节，
                 // 修正书源搜索规则里可能过时/错误的 lastChapter（如只给到第 81 章）。
-                book.chapterCount = list.size
-                list.lastOrNull()?.title?.takeIf { it.isNotBlank() }?.let { book.lastChapter = it }
+                book.chapterCount = ChapterStats.realChapterCount(list)
+                ChapterStats.lastRealChapter(list)?.title?.takeIf { it.isNotBlank() }?.let { book.lastChapter = it }
             }
             if (list.isEmpty()) tocError = "目录解析为空（书源规则不匹配或网络失败）"
             loadingToc = false
@@ -424,8 +425,8 @@ private fun NovelApp() {
             }
             chapters = list
             if (list.isNotEmpty()) {
-                book.chapterCount = list.size
-                list.lastOrNull()?.title?.takeIf { it.isNotBlank() }?.let { book.lastChapter = it }
+                book.chapterCount = ChapterStats.realChapterCount(list)
+                ChapterStats.lastRealChapter(list)?.title?.takeIf { it.isNotBlank() }?.let { book.lastChapter = it }
             }
             loadingToc = false
             if (list.isEmpty()) {
@@ -872,7 +873,7 @@ private fun TocScreen(
             title = book.name.ifBlank { "目录" },
             subtitle = listOfNotNull(
                 book.author.takeIf { it.isNotBlank() },
-                if (chapters.isNotEmpty()) "共 ${chapters.size} 章" else null,
+                if (chapters.isNotEmpty()) "共 ${ChapterStats.realChapterCount(chapters)} 章" else null,
             ).joinToString(" · ").ifBlank { null },
             // 第14批：右上角 ↓ / ↑ ——点一下跳末章，再点一下回首章。
             trailing = {
