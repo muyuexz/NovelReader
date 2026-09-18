@@ -30,7 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.novelreader.ui.AppHeader
-import com.example.novelreader.ui.CoverThumb
+import com.example.novelreader.ui.CoverBadge
 import com.example.novelreader.ui.StateBlock
 
 /* ==================================================================== *
@@ -99,7 +99,7 @@ private fun ShelfCard(
                 .padding(12.dp),
             verticalAlignment = Alignment.Top,
         ) {
-            CoverThumb(entry.coverUrl, entry.name.ifBlank { "书" })
+            CoverBadge(entry.name.ifBlank { "书" })
             Spacer(Modifier.width(13.dp))
             Column(Modifier.weight(1f)) {
                 Text(

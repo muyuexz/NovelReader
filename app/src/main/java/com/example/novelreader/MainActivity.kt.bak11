@@ -71,12 +71,7 @@ import com.example.novelreader.ui.ReaderPalettes
 import com.example.novelreader.ui.StateBlock
 import com.example.novelreader.ui.TagPill
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
@@ -206,8 +201,6 @@ private fun NovelApp() {
                 withContext(Dispatchers.IO) {
                     runCatching { ShelfRepository.refreshMeta(context, book, src.bookSourceUrl) }
                 }
-                // 第11批：封面/简介/最新章节回填后同步刷新书架，封面与进度一起跟手。
-                withContext(Dispatchers.Main) { refreshShelf() }
             }
         }
     }
@@ -255,9 +248,6 @@ private fun NovelApp() {
             // 进度写入与正文拉取并发：进度是本地 IO，不该拖慢正文首屏（第 8 条）
             launch(Dispatchers.IO) {
                 runCatching { ShelfRepository.updateProgress(context, b.bookUrl, src.bookSourceUrl, ch) }
-                // 第11批：进度落盘后必须回灌 UI 状态，否则 shelfEntries 仍是启动时的旧快照，
-                // 返回书架/详情时 continueChapter 读旧值 → 续读回到第一章、书架显示「尚未开始阅读」。
-                withContext(Dispatchers.Main) { refreshShelf() }
             }
             if (cached == null) {
                 val txt = withContext(Dispatchers.IO) {
@@ -279,7 +269,7 @@ private fun NovelApp() {
     }
 
     // 第 5 条：离线缓存区间（从第 a 章到第 b 章，1 基、含端点）。
-    // 第11批起改为多线程并发拉取、去重，写进 contentCache；之后翻到这些章节即秒开，不用每次在线等。
+    // 串行拉取、去重，写进 contentCache；之后翻到这些章节即秒开，不用每次在线等。
     val cacheRange: (Int, Int) -> Unit = cr@{ a, bEnd ->
         val b = currentBook ?: return@cr
         val src = b.source ?: return@cr
@@ -288,30 +278,19 @@ private fun NovelApp() {
         scope.launch(Dispatchers.IO) {
             val lo = a.coerceIn(1, list.size)
             val hi = bEnd.coerceIn(lo, list.size)
-            // 第11批：多线程离线缓存。先筛出真正要下的章节并抢占去重标记，
-            // 再用信号量把并发压在 4，既提速又不至于把书源站点打爆。
-            val targets = (lo..hi).mapNotNull { idx ->
-                list.getOrNull(idx - 1)?.takeIf {
-                    !contentCache.containsKey(it.url) && prefetching.add(it.url)
-                }
-            }
-            val gate = Semaphore(4)
-            coroutineScope {
-                targets.map { c ->
-                    async {
-                        gate.withPermit {
-                            val t = runCatching { BookSourceEngine.getContent(src, b, c) }
-                                .getOrDefault("")
-                            if (t.isNotBlank()) {
-                                contentCache[c.url] = t
-                                // 每成功一章立刻 +1，目录页「已缓存」标签实时递增。
-                                withContext(Dispatchers.Main) { cacheTick++ }
-                            } else {
-                                prefetching.remove(c.url)
-                            }
-                        }
+            for (i in lo..hi) {
+                val c = list[i - 1]
+                if (!contentCache.containsKey(c.url) && prefetching.add(c.url)) {
+                    val t = runCatching { BookSourceEngine.getContent(src, b, c) }.getOrDefault("")
+                    if (t.isNotBlank()) {
+                        contentCache[c.url] = t
+                        // 第10批：每缓存成功一章就立刻 +1，目录页「已缓存」标签实时递增，
+                        // 不必等整段跑完、也不必退出目录再进来。
+                        withContext(Dispatchers.Main) { cacheTick++ }
+                    } else {
+                        prefetching.remove(c.url)
                     }
-                }.awaitAll()
+                }
             }
         }
     }
