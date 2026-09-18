@@ -25,6 +25,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
@@ -62,14 +63,17 @@ fun SourceManagerScreen(
     onBack: () -> Unit,
     onImportText: (String) -> Unit,
     onImportNetwork: (String) -> Unit,
+    onAddSource: (String, String, String?) -> Unit,
     onDelete: (Set<String>) -> Unit,
     onToggle: (String, Boolean) -> Unit,
     onClearNotice: () -> Unit,
+    importStage: String? = null,
 ) {
     val context = LocalContext.current
     var query by remember { mutableStateOf("") }
     var menuOpen by remember { mutableStateOf(false) }
     var showUrlDialog by remember { mutableStateOf(false) }
+    var showNewDialog by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf(setOf<String>()) }
 
     // 本地导入：拉起系统文件选择器，读成文本交给上层解析入库。
@@ -137,10 +141,33 @@ fun SourceManagerScreen(
                                 showUrlDialog = true
                             },
                         )
+                        DropdownMenuItem(
+                            text = { Text("新建源") },
+                            onClick = {
+                                menuOpen = false
+                                showNewDialog = true
+                            },
+                        )
                     }
                 }
             },
         )
+
+        if (importStage != null) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+            ) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = importStage ?: "",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
 
         OutlinedTextField(
             value = query,
@@ -207,7 +234,7 @@ fun SourceManagerScreen(
             StateBlock(
                 title = if (sources.isEmpty()) "还没有书源" else "没有匹配的书源",
                 description = if (sources.isEmpty()) {
-                    "点右上角 \u22ee 用「本地导入」或「网络导入」添加书源"
+                    "点右上角 \u22ee 用「本地导入」「网络导入」或「新建源」添加书源"
                 } else {
                     "换个关键词试试"
                 },
@@ -263,6 +290,63 @@ fun SourceManagerScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showUrlDialog = false }) { Text("取消") }
+            },
+        )
+    }
+
+    if (showNewDialog) {
+        var newName by remember { mutableStateOf("") }
+        var newUrl by remember { mutableStateOf("") }
+        var newGroup by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showNewDialog = false },
+            title = { Text("新建书源") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = newName,
+                        onValueChange = { newName = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        placeholder = { Text("书源名称（必填）") },
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = newUrl,
+                        onValueChange = { newUrl = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        placeholder = { Text("书源地址 URL（必填）") },
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = newGroup,
+                        onValueChange = { newGroup = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        placeholder = { Text("分组（可选）") },
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "提示：新建的源只含占位信息，规则字段为空；要能搜到书，还需在源 JSON 里补全搜索/目录/正文规则。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (newName.isNotBlank() && newUrl.isNotBlank()) {
+                            showNewDialog = false
+                            onAddSource(newName, newUrl, newGroup)
+                        }
+                    },
+                    enabled = newName.isNotBlank() && newUrl.isNotBlank(),
+                ) { Text("新建") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showNewDialog = false }) { Text("取消") }
             },
         )
     }

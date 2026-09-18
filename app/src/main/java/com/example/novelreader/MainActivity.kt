@@ -146,6 +146,8 @@ private fun NovelApp(
     // 第21批：书源管理页展示的完整列表 + 操作结果提示（导入/删除后回灌）
     var sourceList by remember { mutableStateOf(listOf<BookSource>()) }
     var sourceNotice by remember { mutableStateOf<String?>(null) }
+    // 第35批：书源导入进度（非空 = 正在导入，内容为当前阶段文案）。
+    var importStage by remember { mutableStateOf<String?>(null) }
 
     // 搜索
     var keyword by remember { mutableStateOf("") }
@@ -701,9 +703,11 @@ private fun NovelApp(
                     SourceManagerScreen(
                         sources = sourceList,
                         notice = sourceNotice,
+                        importStage = importStage,
                         onBack = { homeTab = 0 },
                         onImportText = { text ->
                             scope.launch {
+                                importStage = "正在读取并解析书源…"
                                 val msg = withContext(Dispatchers.IO) {
                                     if (text.isBlank()) {
                                         "读取文件失败，请换一个文件试试"
@@ -714,32 +718,59 @@ private fun NovelApp(
                                         if (ok.isEmpty()) {
                                             "没有解析到有效书源，请确认是 Legado 书源 JSON"
                                         } else {
+                                            withContext(Dispatchers.Main) {
+                                                importStage = "已解析 ${ok.size} 条，正在写入…"
+                                            }
                                             val added = SourceRepository.import(context, ok)
                                             "导入完成：解析 ${ok.size} 条，新增 ${added} 条"
                                         }
                                     }
                                 }
                                 refreshSources()
+                                importStage = null
                                 sourceNotice = msg
                             }
                         },
                         onImportNetwork = { url ->
                             scope.launch {
+                                importStage = "正在下载书源…"
                                 val msg = withContext(Dispatchers.IO) {
                                     val text = runCatching { Network.fetch(url) }.getOrNull()
                                     if (text.isNullOrBlank()) {
                                         "网络拉取失败，请检查链接是否可直连"
                                     } else {
+                                        withContext(Dispatchers.Main) {
+                                            importStage = "下载完成，正在解析…"
+                                        }
                                         val (ok, _) = runCatching {
                                             BookSourceParser.parseLenient(text)
                                         }.getOrElse { emptyList<BookSource>() to 0 }
                                         if (ok.isEmpty()) {
                                             "该链接没有解析到有效书源"
                                         } else {
+                                            withContext(Dispatchers.Main) {
+                                                importStage = "已解析 ${ok.size} 条，正在写入…"
+                                            }
                                             val added = SourceRepository.import(context, ok)
                                             "导入完成：解析 ${ok.size} 条，新增 ${added} 条"
                                         }
                                     }
+                                }
+                                refreshSources()
+                                importStage = null
+                                sourceNotice = msg
+                            }
+                        },
+                        onAddSource = { name, url, group ->
+                            scope.launch {
+                                val msg = withContext(Dispatchers.IO) {
+                                    val src = BookSource(
+                                        bookSourceUrl = url.trim(),
+                                        bookSourceName = name.trim(),
+                                        bookSourceGroup = group?.trim()?.ifBlank { null },
+                                    )
+                                    val added = SourceRepository.import(context, listOf(src))
+                                    if (added > 0) "已新建书源：${name.trim()}" else "已存在相同书源，未新增"
                                 }
                                 refreshSources()
                                 sourceNotice = msg
@@ -1009,7 +1040,7 @@ private fun SearchScreen(
                 )
                 sourceCount == 0 -> StateBlock(
                     title = "还没有书源",
-                    description = "内置书源已移除。切到「书源」页，用右上角 \u22ee 的本地/网络导入你的书源",
+                    description = "切到「书源」页，用右上角 \u22ee 的本地/网络导入你的书源",
                 )
                 !hasSearched -> StateBlock(
                     title = "开始探索",
