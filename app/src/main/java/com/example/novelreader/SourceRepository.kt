@@ -119,6 +119,10 @@ object SourceRepository {
             val jobs = targets.map { src ->
                 async(Dispatchers.IO) {
                     sem.withPermit {
+                        // 第 24 批加固：整段（含 filter / rank / onBatch 回调）都吞
+                        // 异常。原实现 runCatching 只包住 withTimeout，isRelevant /
+                        // rankByRelevance / onBatch 都在外面，单源一抛就炸穿协程。
+                        runCatching {
                         val hits = runCatching {
                             withTimeout(perSourceTimeoutMs) { BookSourceEngine.search(src, key) }
                         }.getOrDefault(emptyList()).filter { isRelevant(it, key) }
@@ -128,8 +132,10 @@ object SourceRepository {
                             val snapshot = synchronized(lock) {
                                 acc += hits
                                 rankByRelevance(acc, key)
-                            }
+                            // 第 24 批：按 bookUrl 去重，避免多源同一本书造成列表重复。
+                            }.distinctBy { it.bookUrl }
                             onBatch(snapshot)
+                        }
                         }
                     }
                 }

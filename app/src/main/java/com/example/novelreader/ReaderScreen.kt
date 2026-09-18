@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -1099,7 +1100,11 @@ private fun FullTextSearchPage(
                     state = listState,
                     modifier = Modifier.fillMaxWidth().weight(1f).padding(horizontal = 14.dp),
                 ) {
-                    items(hits, key = { it.chapter.url }) { h ->
+                    // 第 24 批：同一章 URL 可能被多源重复命中，key 必须唯一。
+                    itemsIndexed(
+                        items = hits,
+                        key = { index, h -> "hit-" + index + "-" + h.chapter.url },
+                    ) { _, h ->
                         val c = h.chapter
                         Column(
                             Modifier

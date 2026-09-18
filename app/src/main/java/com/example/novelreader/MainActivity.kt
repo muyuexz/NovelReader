@@ -803,7 +803,13 @@ private fun SearchScreen(
                         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        items(hits, key = { it.originName + "|" + it.bookUrl + "|" + it.name }) { book ->
+                        // 第 24 批：key 必须唯一。旧 key 由 originName|bookUrl|name 拼成，
+                        // 不同书源返回同名同链接的书时会产生重复 key，LazyColumn 直接抛
+                        // IllegalArgumentException 闪退（Compose 渲染期异常，runCatching 够不着）。
+                        itemsIndexed(
+                            items = hits,
+                            key = { index, book -> "sr-" + index + "-" + book.bookUrl },
+                        ) { _, book ->
                             BookCard(book) { onOpen(book) }
                         }
                     }
