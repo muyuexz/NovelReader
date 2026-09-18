@@ -141,24 +141,6 @@ fun ReaderScreen(
     // seekChapter = 待跳转的章 url（跳完即清空）；highlight = 当前要在正文里标黄的关键字。
     var seekChapter by remember { mutableStateOf("") }
     var highlight by remember { mutableStateOf("") }
-    // 第20批：搜索结果导航模式的状态。
-    // navHits/navKw 记住「这一轮搜索的全部结果 + 关键字」，
-    // navIndex = 当前定位到第几条（-1 表示未进入导航模式）。
-    var navHits by remember { mutableStateOf(emptyList<SearchHit>()) }
-    var navKw by remember { mutableStateOf("") }
-    var navIndex by remember { mutableStateOf(-1) }
-    // 导航模式：已点过某条结果、且没停在搜索结果页时才生效。
-    val navActive = navIndex in navHits.indices && !showSearch
-    // 跳到第 i 条结果：记住下标、标红关键字、翻到目标章。
-    val navJumpTo: (Int) -> Unit = { i ->
-        if (i in navHits.indices) {
-            navIndex = i
-            highlight = navKw
-            seekChapter = navHits[i].chapter.url
-            barsVisible = true
-            onOpenChapter(navHits[i].chapter)
-        }
-    }
     val palette = ReaderPalettes.firstOrNull { it.id == paletteId } ?: ReaderPalettes.first()
 
     val density = LocalDensity.current
@@ -407,7 +389,7 @@ fun ReaderScreen(
 
         // —— 设置面板 + 底部翻章栏（浮层）——
         AnimatedVisibility(
-            visible = barsVisible && !navActive,
+            visible = barsVisible,
             modifier = Modifier.align(Alignment.BottomCenter).zIndex(1f),
         ) {
             Column {
@@ -609,82 +591,6 @@ fun ReaderScreen(
         }
 
         // ============================================================
-        // 第20批：搜索结果导航模式。
-        // 跳转定位后：正文中间两侧是「上一条 / 下一条结果」，
-        // 底部导航条给出「结果」（回到搜索页，结果照旧保留）与「退出」
-        // （清除正文标红 + 两侧按钮）。
-        // ============================================================
-        if (navActive) {
-            Box(
-                Modifier
-                    .align(Alignment.CenterStart)
-                    .padding(start = 8.dp)
-                    .zIndex(2f)
-                    .size(38.dp)
-                    .clip(CircleShape)
-                    .background(palette.panel.copy(alpha = 0.92f))
-                    .clickable { navJumpTo(navIndex - 1) },
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    "‹",
-                    color = if (navIndex > 0) palette.fg else palette.fg.copy(alpha = 0.3f),
-                    fontSize = 22.sp,
-                )
-            }
-            Box(
-                Modifier
-                    .align(Alignment.CenterEnd)
-                    .padding(end = 8.dp)
-                    .zIndex(2f)
-                    .size(38.dp)
-                    .clip(CircleShape)
-                    .background(palette.panel.copy(alpha = 0.92f))
-                    .clickable { navJumpTo(navIndex + 1) },
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    "›",
-                    color = if (navIndex < navHits.size - 1) palette.fg else palette.fg.copy(alpha = 0.3f),
-                    fontSize = 22.sp,
-                )
-            }
-        }
-        AnimatedVisibility(
-            visible = navActive && barsVisible,
-            modifier = Modifier.align(Alignment.BottomCenter).zIndex(2f),
-        ) {
-            Surface(color = palette.panel) {
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    TextButton(onClick = { showSearch = true }) {
-                        Text("结果", color = palette.fg, fontSize = 14.sp)
-                    }
-                    Text(
-                        text = "搜索结果: " + (navIndex + 1) + "/" + navHits.size +
-                            "  当前章节: 第" + (chapters.indexOfFirst { it.url == chapter.url } + 1) +
-                            "章 " + chapter.title,
-                        color = palette.sub,
-                        fontSize = 12.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                    TextButton(onClick = {
-                        navIndex = -1
-                        navHits = emptyList()
-                        navKw = ""
-                        highlight = ""
-                    }) {
-                        Text("退出", color = palette.fg, fontSize = 14.sp)
-                    }
-                }
-            }
-        }
-
-        // ============================================================
         // 第17批：正文搜索整页化——弹窗下架，改成整页覆盖式搜索页。
         // 只扫缓存的时代结束：未缓存章节由搜索页用书源规则联网补拉，
         // 命中范围对齐 Legado 的「全书检索」。
@@ -698,18 +604,13 @@ fun ReaderScreen(
                 currentContent = content,
                 cache = cache,
                 onCacheLoaded = onCacheLoaded,
-                initialKw = navKw,
-                initialHits = navHits,
                 onClose = { showSearch = false },
-                onJump = { list, index, kw ->
-                    // 第20批：把整份结果与当前下标交回阅读页，进入导航模式。
-                    navHits = list
-                    navKw = kw
-                    navIndex = index
+                onJump = { c, kw ->
+                    // 第16批的「跳哪一章 + 高亮什么词」意图照旧交给阅读页消费。
                     highlight = kw
-                    seekChapter = list.getOrNull(index)?.chapter?.url ?: ""
+                    seekChapter = c.url
                     showSearch = false
-                    list.getOrNull(index)?.let { onOpenChapter(it.chapter) }
+                    onOpenChapter(c)
                 },
             )
         }
@@ -875,20 +776,16 @@ private fun FullTextSearchPage(
     currentContent: String,
     cache: Map<String, String>,
     onCacheLoaded: (String, String) -> Unit,
-    initialKw: String,
-    initialHits: List<SearchHit>,
     onClose: () -> Unit,
-    onJump: (List<SearchHit>, Int, String) -> Unit,
+    onJump: (BookChapter, String) -> Unit,
 ) {
-    var kw by remember { mutableStateOf(initialKw) }
+    var kw by remember { mutableStateOf("") }
     var scanning by remember { mutableStateOf(false) }
-    var scanned by remember { mutableStateOf(if (initialHits.isNotEmpty()) chapters.size else 0) }
-    var totalCount by remember { mutableStateOf(initialHits.sumOf { it.count }) }
-    var hits by remember { mutableStateOf(initialHits) }
+    var scanned by remember { mutableStateOf(0) }
+    var totalCount by remember { mutableStateOf(0) }
+    var hits by remember { mutableStateOf(emptyList<SearchHit>()) }
     // 第19批：失败章节数（覆盖度反馈用）。
     var failed by remember { mutableStateOf(0) }
-    // 第20批：本轮已扫完的关键字。带着旧结果从搜索结果页返回时跳过重扫。
-    var scannedKw by remember { mutableStateOf(if (initialHits.isNotEmpty()) initialKw else "") }
     val ctx = LocalContext.current
     // 第19批：内层返回拦截。全文搜索是阅读页内部的覆盖层，
     // 系统返回手势在这里先被本回调吃掉，只关闭搜索页、留在阅读页；
@@ -905,14 +802,11 @@ private fun FullTextSearchPage(
     // 停手 350ms 才真正开搜，避免边打字边全书扫描。
     LaunchedEffect(kw, chapters.size, source) {
         val key = kw.trim()
-        // 第20批：带旧结果返回、关键字未变时直接跳过，结果照旧保留。
-        if (key.isNotEmpty() && key == scannedKw) return@LaunchedEffect
         if (key.isEmpty()) {
             scanning = false
             scanned = 0
             totalCount = 0
             hits = emptyList()
-            scannedKw = ""
             return@LaunchedEffect
         }
         delay(350)
@@ -1006,7 +900,6 @@ private fun FullTextSearchPage(
         totalCount = snap.sumOf { it.count }
         failed = failCount.get()
         scanned = total
-        scannedKw = key
     }
 
     Box(
@@ -1104,7 +997,7 @@ private fun FullTextSearchPage(
                         Column(
                             Modifier
                                 .fillMaxWidth()
-                                .clickable { onJump(hits, hits.indexOfFirst { it.chapter.url == h.chapter.url }, kw.trim()) }
+                                .clickable { onJump(c, kw.trim()) }
                                 .padding(vertical = 10.dp),
                         ) {
                             Row(
