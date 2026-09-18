@@ -299,10 +299,11 @@ private fun InfoRow(label: String, value: String) {
 }
 
 private val BigCoverShades = listOf(
-    listOf(Color(0xFF7C4DFF), Color(0xFF5E35B1)),
-    listOf(Color(0xFF3F51B5), Color(0xFF283593)),
-    listOf(Color(0xFF009688), Color(0xFF00695C)),
-    listOf(Color(0xFFFF8A65), Color(0xFFD84315)),
+    // 第 29 批：与 Components.kt 的 CoverShades 对齐，去掉靛蓝 / 土棕。
+    listOf(Color(0xFF6C4DF6), Color(0xFF4B32C4)),
+    listOf(Color(0xFF9B2FD6), Color(0xFF6A1BA8)),
+    listOf(Color(0xFF00A9A0), Color(0xFF00786F)),
+    listOf(Color(0xFFFF8A65), Color(0xFFD8552A)),
 )
 
 @Composable

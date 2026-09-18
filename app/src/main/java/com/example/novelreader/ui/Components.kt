@@ -72,7 +72,7 @@ fun AppHeader(
         ) {
             Text(
                 text = title,
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.titleLarge,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -151,13 +151,16 @@ fun PillChip(
 /* ------------------------------------------------------------------ *
  *  书籍封面占位：首字 + 渐变底，不同书不同色（按标题 hash 分桶）
  * ------------------------------------------------------------------ */
+// 第 29 批：占位封面色统一收敛到品牌同族色系。
+// 旧版 6 组里混了 3 组靛蓝(0xFF3F51B5 / 0xFF5C6BC0 / 0xFF3949AB)和 1 组土棕(0xFF8D6E63)，
+// 封面墙和紫调主色是打架的；现在只保留紫 / 品紫 / 玫红 / 青瓷 / 暖橘 / 深紫六个方向。
 private val CoverShades = listOf(
-    listOf(Color(0xFF7C4DFF), Color(0xFF5E35B1)),
-    listOf(Color(0xFF3F51B5), Color(0xFF283593)),
-    listOf(Color(0xFF009688), Color(0xFF00695C)),
-    listOf(Color(0xFFFF8A65), Color(0xFFD84315)),
-    listOf(Color(0xFF5C6BC0), Color(0xFF3949AB)),
-    listOf(Color(0xFF8D6E63), Color(0xFF4E342E)),
+    listOf(Color(0xFF6C4DF6), Color(0xFF4B32C4)),
+    listOf(Color(0xFF9B2FD6), Color(0xFF6A1BA8)),
+    listOf(Color(0xFFE2557B), Color(0xFFA82F55)),
+    listOf(Color(0xFF00A9A0), Color(0xFF00786F)),
+    listOf(Color(0xFFFF8A65), Color(0xFFD8552A)),
+    listOf(Color(0xFF5B48B8), Color(0xFF3A2A86)),
 )
 
 @Composable
@@ -214,10 +217,11 @@ fun CoverThumb(coverUrl: String?, name: String, modifier: Modifier = Modifier) {
 fun BookCard(book: Book, onClick: () -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
+        // 第 29 批：圆角收到 16dp 与全站圆角语言统一，阴影 1→2dp 让卡片有轻微悬浮感。
+        shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        shadowElevation = 1.dp,
+        shadowElevation = 2.dp,
     ) {
         Row(
             modifier = Modifier

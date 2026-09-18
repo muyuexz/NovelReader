@@ -83,6 +83,10 @@ dependencies {
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
+    // 第 29 批：底部导航栏换矢量图标需要图标库。
+    // 只引 core（约 48 个基础图标，体积很小，版本由 Compose BOM 统一）；
+    // extended 会塞进上万张矢量图，体积和构建时间都不划算，坚决不引。
+    implementation("androidx.compose.material:material-icons-core")
     implementation("androidx.compose.foundation:foundation")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

@@ -34,11 +34,18 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -722,21 +729,37 @@ private fun NovelApp() {
                     )
                 }
             }
-            NavigationBar {
+            // 第 29 批：底部导航栏的 emoji（📚 / 🔍 / 🗂）换成矢量图标。
+            // emoji 的字形和配色完全由系统字体决定，各家 ROM 渲染出来大小、
+            // 彩色/单色都不一致，是全站最"业余"的一处。改用 material-icons-core
+            // 的 Home / Search / Settings，并统一 tint 到品牌色。
+            NavigationBar(
+                containerColor = MaterialTheme.colorScheme.surface,
+                tonalElevation = 0.dp,
+            ) {
+                val navColors = NavigationBarItemDefaults.colors(
+                    selectedIconColor = MaterialTheme.colorScheme.primary,
+                    selectedTextColor = MaterialTheme.colorScheme.primary,
+                    indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 NavigationBarItem(
                     selected = homeTab == 0,
                     onClick = {
                         refreshShelf()
                         homeTab = 0
                     },
-                    icon = { Text("📚", fontSize = 18.sp) },
+                    icon = { Icon(Icons.Filled.Home, contentDescription = "书架") },
                     label = { Text("书架") },
+                    colors = navColors,
                 )
                 NavigationBarItem(
                     selected = homeTab == 1,
                     onClick = { homeTab = 1 },
-                    icon = { Text("🔍", fontSize = 18.sp) },
+                    icon = { Icon(Icons.Filled.Search, contentDescription = "发现") },
                     label = { Text("发现") },
+                    colors = navColors,
                 )
                 NavigationBarItem(
                     selected = homeTab == 2,
@@ -745,8 +768,9 @@ private fun NovelApp() {
                         refreshSources()
                         homeTab = 2
                     },
-                    icon = { Text("🗂", fontSize = 18.sp) },
+                    icon = { Icon(Icons.Filled.Settings, contentDescription = "书源") },
                     label = { Text("书源") },
+                    colors = navColors,
                 )
             }
         }
@@ -808,8 +832,9 @@ private fun SearchScreen(
             Spacer(Modifier.height(16.dp))
             // 搜索胶囊：白底圆角容器包一层，输入区透明、按钮圆角呼应
             Surface(
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(18.dp),
                 color = MaterialTheme.colorScheme.surface,
+                shadowElevation = 6.dp,
             ) {
                 Row(
                     Modifier.fillMaxWidth().padding(6.dp),
@@ -833,13 +858,36 @@ private fun SearchScreen(
                         ),
                     )
                     Spacer(Modifier.width(6.dp))
+                    // 第 29 批：搜索按钮重做。
+                    // 旧版是默认 Button，容器色吃 colorScheme.primary 的实心紫，扁平又跳色；
+                    // 现在容器设为透明，自己铺品牌渐变（与 Hero 头同一支渐变），
+                    // 禁用态回落 surfaceVariant，视觉上头尾呼应。
+                    val canSearch = !searching && keyword.trim().isNotEmpty()
                     Button(
                         onClick = onSearch,
-                        enabled = !searching && keyword.trim().isNotEmpty(),
-                        shape = RoundedCornerShape(12.dp),
-                        contentPadding = PaddingValues(horizontal = 22.dp, vertical = 12.dp),
+                        enabled = canSearch,
+                        shape = RoundedCornerShape(14.dp),
+                        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color.Transparent,
+                            contentColor = Color.White,
+                            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        ),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(14.dp))
+                            .then(
+                                if (canSearch) {
+                                    Modifier.background(Brush.linearGradient(Ink.BrandGradient))
+                                } else {
+                                    Modifier
+                                },
+                            ),
                     ) {
-                        Text(if (searching) "搜索中" else "搜索")
+                        Text(
+                            if (searching) "搜索中" else "搜索",
+                            style = MaterialTheme.typography.labelLarge,
+                        )
                     }
                 }
             }
