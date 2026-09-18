@@ -95,6 +95,24 @@ import com.example.novelreader.ui.Stepper
  *  graphicsLayer 做 3D 旋转（以左侧书脊为轴心），配合书脊阴影，
  *  模拟纸张被掀起 → 绕轴翻过去的过程。
  * ==================================================================== */
+// 第 32 批：中文章节站正文常自带一行「第X章 …」标题，与目录标题重复，这里识别并剥离。
+private val RE_CHAPTER_HEAD = Regex("^第\\s*[0-9０-９零一二三四五六七八九十百千万两]{1,10}\\s*[章節节]")
+
+/**
+ * 第 32 批：若正文第一行本身就是章标题（短行、以「第X章」开头），
+ * 就剥掉这一行——首行标题统一由目录 label 提供，避免同一个标题出现两次。
+ */
+private fun stripLeadingChapterHead(text: String): String {
+    val t = text.trimStart()
+    val nl = t.indexOf('\n')
+    if (nl <= 0) return t
+    val first = t.substring(0, nl).trim()
+    if (first.isEmpty() || first.length > 40) return t
+    if (!RE_CHAPTER_HEAD.containsMatchIn(first)) return t
+    val rest = t.substring(nl + 1).trimStart()
+    return if (rest.isBlank()) t else rest
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ReaderScreen(
@@ -327,12 +345,18 @@ fun ReaderScreen(
                     val availW = with(density) { (maxWidth - 44.dp).toPx() }
                     val availH = with(density) { (maxHeight - 32.dp).toPx() }
                     // 第 30 批：每章第一页开头标出当前目录章节（顶格、与正文空一行）。
-                    val chapterLabel = if (chapter.title.isNotBlank()) {
-                        if (idx >= 0) "第 " + (idx + 1) + " 章 " + chapter.title else chapter.title
+                    // 第 32 批：目录标题若已自带「第X章」，不再叠加序号，避免「第3章第3章…」。
+                    val rawTitle = chapter.title.trim()
+                    val chapterLabel = if (rawTitle.isNotBlank()) {
+                        if (RE_CHAPTER_HEAD.containsMatchIn(rawTitle.take(12))) rawTitle
+                        else if (idx >= 0) "第 " + (idx + 1) + " 章 " + rawTitle else rawTitle
                     } else {
                         ""
                     }
-                    val body = indentParagraphs(content.ifBlank { "（正文为空）" }).let { t ->
+                    // 第 32 批：正文首行常自带章标题，先剥离再拼 label，否则标题被渲染两次。
+                    val bodyText = if (chapterLabel.isBlank()) content.ifBlank { "（正文为空）" }
+                    else stripLeadingChapterHead(content.ifBlank { "（正文为空）" })
+                    val body = indentParagraphs(bodyText).let { t ->
                         if (chapterLabel.isBlank()) t else chapterLabel + "\n\n" + t
                     }
                     val contentPages = remember(body, availW, availH, textStyle) {
@@ -361,6 +385,18 @@ fun ReaderScreen(
                             pageItems.lastIndex -> next?.let { navLock = true; onOpenChapter(it) }
                         }
                     }
+
+                    // 第 32 批：正文区右下角常显（对齐 Legado）——本章页码/总页数 + 全书已阅读百分比。
+                    // 顶栏/底栏是浮层，此浮标固定吊在正文区右下角；底栏弹出时被底栏盖住，不重复显示。
+                    Text(
+                        text = curPage.coerceAtLeast(1).toString() + "/" + totalPages + " " + bookPercent + "%",
+                        color = palette.sub,
+                        fontSize = 11.sp,
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(end = 22.dp, bottom = 2.dp)
+                            .zIndex(2f),
+                    )
 
                     if (pageItems.isEmpty()) {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -593,13 +629,7 @@ fun ReaderScreen(
                         ) {
                             Text("目录", color = palette.fg, fontSize = 14.sp)
                         }
-                        // 第 30 批：设置页脚右下角——当前页数 + 全书已阅读百分比。
-                        Text(
-                            text = "第 " + curPage.coerceAtLeast(1) + "/" + totalPages + " 页 · " + bookPercent + "%",
-                            color = palette.sub,
-                            fontSize = 12.sp,
-                            modifier = Modifier.padding(end = 10.dp),
-                        )
+                        // 第 32 批：页码 + 百分比已移到正文区右下角常显，此处不再重复。
                     }
                 }
             }
