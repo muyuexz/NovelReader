@@ -1,11 +1,13 @@
 package com.example.novelreader
 
+import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.BackHandler
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -36,6 +38,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
@@ -99,12 +102,22 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             // 关键改造：不再用裸 MaterialTheme{}，接入自定义 ColorScheme + Typography。
-            NovelReaderTheme {
+            // 第34批：主题模式提到根部持有（0跟随系统 / 1浅色 / 2深色），
+            // 由设置页切换并持久化到 SharedPreferences，改动即时生效。
+            val ctx = LocalContext.current
+            var themeMode by remember { mutableStateOf(readThemeMode(ctx)) }
+            NovelReaderTheme(themeMode = themeMode) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background,
                 ) {
-                    NovelApp()
+                    NovelApp(
+                        themeMode = themeMode,
+                        onThemeModeChange = {
+                            themeMode = it
+                            writeThemeMode(ctx, it)
+                        },
+                    )
                 }
             }
         }
@@ -118,7 +131,10 @@ class MainActivity : ComponentActivity() {
  * 不引入导航库（依赖已主动瘦身，少一个白背包袱）。
  */
 @Composable
-private fun NovelApp() {
+private fun NovelApp(
+    themeMode: Int,
+    onThemeModeChange: (Int) -> Unit,
+) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
@@ -654,13 +670,34 @@ private fun NovelApp() {
                                     // 回调是全量有序快照（已按匹配度/源权重排序），整体替换即可。
                                     SourceRepository.search(k) { ranked -> hits = ranked }
                                     searching = false
+                                    // 第34批：搜索封面兜底。大多数书源的搜索规则不给封面
+                                    // （封面规则只写在详情页），这里对仍无封面的前 12 条，
+                                    // 后台并发 3 路拉详情补齐并回写列表，不阻塞搜索收尾。
+                                    withContext(Dispatchers.IO) {
+                                        coroutineScope {
+                                            val pending = hits
+                                                .filter { it.coverUrl.isNullOrBlank() && it.source != null }
+                                                .take(12)
+                                            val sem = Semaphore(3)
+                                            pending.map { b ->
+                                                async {
+                                                    sem.withPermit {
+                                                        runCatching {
+                                                            BookSourceEngine.getBookInfo(b.source!!, b)
+                                                        }
+                                                    }
+                                                }
+                                            }.awaitAll()
+                                        }
+                                    }
+                                    hits = hits.toList()
                                 }
                             }
                         },
                         onOpen = openDetail,
                         listState = searchListState,
                     )
-                } else {
+                } else if (homeTab == 2) {
                     SourceManagerScreen(
                         sources = sourceList,
                         notice = sourceNotice,
@@ -727,6 +764,11 @@ private fun NovelApp() {
                         },
                         onClearNotice = { sourceNotice = null },
                     )
+                } else {
+                    SettingsScreen(
+                        themeMode = themeMode,
+                        onThemeModeChange = onThemeModeChange,
+                    )
                 }
             }
             // 第 29 批：底部导航栏的 emoji（📚 / 🔍 / 🗂）换成矢量图标。
@@ -770,6 +812,13 @@ private fun NovelApp() {
                     },
                     icon = { Icon(Icons.Filled.Settings, contentDescription = "书源") },
                     label = { Text("书源") },
+                    colors = navColors,
+                )
+                NavigationBarItem(
+                    selected = homeTab == 3,
+                    onClick = { homeTab = 3 },
+                    icon = { Icon(Icons.Filled.Info, contentDescription = "设置") },
+                    label = { Text("设置") },
                     colors = navColors,
                 )
             }
@@ -1171,5 +1220,153 @@ private fun writeToDownloads(context: android.content.Context, name: String, tex
         if (!dir.exists()) dir.mkdirs()
         java.io.File(dir, name).writeText(text, Charsets.UTF_8)
         return true
+    }
+}
+
+/* ==================================================================== *
+ *  设置 / 帮助页（第34批新增）
+ *  三块：外观（主题切换）、书源制作小白教程、关于本软件。
+ *  主题偏好沿用 SharedPreferences（与 reader_prefs / shelf_prefs 同风格）。
+ * ==================================================================== */
+private const val APP_PREFS = "app_prefs"
+private const val KEY_THEME_MODE = "theme_mode"
+
+private fun readThemeMode(ctx: Context): Int =
+    ctx.getSharedPreferences(APP_PREFS, Context.MODE_PRIVATE).getInt(KEY_THEME_MODE, 0)
+
+private fun writeThemeMode(ctx: Context, mode: Int) {
+    ctx.getSharedPreferences(APP_PREFS, Context.MODE_PRIVATE)
+        .edit().putInt(KEY_THEME_MODE, mode).apply()
+}
+
+private val TUTORIAL_TEXT = """
+【书源制作小白教程】
+
+一、书源是什么
+书源就是一份“抓书配方”：告诉 App 去哪个网站、用什么规则，把搜索结果、详情、目录、正文拿下来。本 App 兼容 Legado（阅读）书源语法。
+
+二、最简四步
+1. 打开目标网站，搜索一本书，复制结果页地址；把地址里的关键词换成 {{key}}，即为 searchUrl。
+2. 在结果页查看源代码，找到每本书的容器（如 class="book-item"），这就是 bookList 规则（写 CSS 选择器，如 .book-item）。
+3. 在容器内分别取：书名 name、作者 author、详情链接 bookUrl、封面 coverUrl。写法：选择器@属性，例如 a@href、img@src。
+4. 详情页再补 ruleBookInfo（书名/作者/简介/封面/目录地址），目录页补 ruleToc（章节列表），正文页补 ruleContent（正文选择器）。
+
+三、语法速查
+· CSS 选择器：.class、#id、div a
+· 取属性：img@src、a@href、h3@text（@text 等价于直接写）
+· 多步：.list .item a@href
+· JS 处理：@js:result.replace(...)（进阶，可后学）
+· 正则替换：##匹配##替换
+
+四、常见坑
+· coverUrl 为空：很多网站的搜索页不给封面，需在详情页规则里补封面，App 会自动兜底拉取。
+· 正文带广告：在 ruleContent 里用 ##广告关键词## 替换掉。
+· 目录分页：用 nextTocUrl 指向“下一页”，App 会自动翻完。
+
+五、导入方式
+书源管理页支持“粘贴文本导入”与“网络链接导入”两种，网络导入可直接使用 Legado 合集 JSON。
+""".trimIndent()
+
+private val ABOUT_TEXT = """
+【关于本软件】
+
+墨读（NovelReader）是一款本地优先的网络小说阅读器：
+· 书籍内容全部来自用户自行导入的书源规则，App 不内置、不分发任何内容；
+· 兼容 Legado（阅读）书源语法，支持本地与网络批量导入；
+· 阅读页支持字号/行距/底色调节、分页翻页、章节缓存与预取；
+· 搜索结果按“书名 + 作者”聚合，同书多源可一键换源。
+
+请仅将本软件用于阅读你有权访问的内容，尊重内容版权与站点规则。
+""".trimIndent()
+
+@Composable
+private fun SettingsCard(title: String, content: @Composable () -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        shadowElevation = 2.dp,
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Spacer(Modifier.height(10.dp))
+            content()
+        }
+    }
+}
+
+@Composable
+private fun SettingsScreen(themeMode: Int, onThemeModeChange: (Int) -> Unit) {
+    val themeOptions = listOf("跟随系统" to 0, "浅色" to 1, "深色" to 2)
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 28.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        item {
+            Column {
+                Text(
+                    "设置与帮助",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "外观 · 书源教程 · 关于",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        item {
+            SettingsCard("外观 · 主题") {
+                themeOptions.forEach { (label, mode) ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { onThemeModeChange(mode) }
+                            .padding(vertical = 10.dp, horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            if (themeMode == mode) "●" else "○",
+                            color = if (themeMode == mode) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            label,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = if (themeMode == mode) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
+            }
+        }
+        item {
+            SettingsCard("书源制作详细小白教程") {
+                Text(
+                    TUTORIAL_TEXT,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+        }
+        item {
+            SettingsCard("关于本软件") {
+                Text(
+                    ABOUT_TEXT,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+        }
     }
 }

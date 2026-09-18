@@ -90,7 +90,11 @@ object BookSourceEngine {
                 book.author = rule.getString(ruleSearch.author)
                 book.kind = rule.getString(ruleSearch.kind)
                 book.intro = rule.getString(ruleSearch.intro)
+                // 第34批：getString(isUrl=true) 在规则取空时会回落成 baseUrl（=搜索页 URL），
+                // 于是「没有封面规则」被写成「封面 = 搜索页地址」，Coil 加载必然失败，列表全是失败态。
+                // 这里把空串与「等于本页 URL」的伪封面一律清掉，交给详情兜底回填。
                 book.coverUrl = rule.getString(ruleSearch.coverUrl, null, true)
+                    .takeIf { it.isNotBlank() && it != resp.url && it != searchUrl }
                 book.wordCount = rule.getString(ruleSearch.wordCount)
                 book.lastChapter = rule.getString(ruleSearch.lastChapter)
                 book.bookUrl = rule.getString(ruleSearch.bookUrl, null, true)
@@ -135,7 +139,10 @@ object BookSourceEngine {
             rule.getString(rbi.wordCount).takeIf { it.isNotBlank() }?.let { book.wordCount = it }
             rule.getString(rbi.lastChapter).takeIf { it.isNotBlank() }?.let { book.lastChapter = it }
             rule.getString(rbi.status).takeIf { it.isNotBlank() }?.let { book.status = it }
-            rule.getString(rbi.coverUrl, null, true).takeIf { it.isNotBlank() }?.let { book.coverUrl = it }
+            // 第34批：同样防「空规则回落成详情页 URL」的伪封面。
+            rule.getString(rbi.coverUrl, null, true)
+                .takeIf { it.isNotBlank() && it != resp.url && it != book.bookUrl }
+                ?.let { book.coverUrl = it }
 
             val tocUrl = rule.getString(rbi.tocUrl, null, true)
             book.tocUrl = tocUrl.ifBlank { book.bookUrl }

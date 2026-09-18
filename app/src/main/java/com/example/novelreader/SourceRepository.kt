@@ -163,6 +163,12 @@ object SourceRepository {
         // 同组每个成员都能看到「除自己以外的全部兄弟源」，换到哪一本都列得全。
         for (g in groups.values) {
             if (g.size <= 1) continue
+            // 第34批：代表条目封面为空时，从同组兄弟源取第一个可用封面回填。
+            // 多源里只要有任意一个源给了封面，列表这条就不会秃着。
+            val cover = g.firstOrNull { !it.coverUrl.isNullOrBlank() }?.coverUrl
+            if (cover != null) {
+                for (b in g) if (b.coverUrl.isNullOrBlank()) b.coverUrl = cover
+            }
             for (b in g) {
                 b.altSources = g.filter { it !== b }
             }

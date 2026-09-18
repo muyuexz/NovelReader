@@ -121,8 +121,13 @@ private val AppTypography = Typography(
 )
 
 @Composable
-fun NovelReaderTheme(content: @Composable () -> Unit) {
-    val dark = isSystemInDarkTheme()
+fun NovelReaderTheme(themeMode: Int = 0, content: @Composable () -> Unit) {
+    // 第34批：themeMode 0=跟随系统 / 1=浅色 / 2=深色，由设置页持久化后传入。
+    val dark = when (themeMode) {
+        1 -> false
+        2 -> true
+        else -> isSystemInDarkTheme()
+    }
     MaterialTheme(
         colorScheme = if (dark) DarkColors else LightColors,
         typography = AppTypography,
