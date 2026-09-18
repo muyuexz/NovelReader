@@ -43,6 +43,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -193,6 +194,26 @@ fun ReaderScreen(
     var enterEndChapter by remember { mutableStateOf<String?>(null) }
 
     val pagerState = rememberPagerState(pageCount = { pageItems.size.coerceAtLeast(1) })
+
+    // 第 28 批：首章的「上一章」占位页 / 末章的「下一章」占位页本身没有内容可翻，
+    // 但 HorizontalPager 依然能滑进去 → 屏幕一片空白（用户诉求：干脆划不动）。
+    // 这里只在「确实没有上一章 / 下一章」时对边界做钳制，把越界的拖拽立刻拽回正文页，
+    // 不动 pageItems 的首尾占位结构——totalPages / seekIdx / 页码上报全都依赖它的 1 基页号。
+    LaunchedEffect(pagerState, prev, next, pageItems.size) {
+        if (pageItems.size < 3) return@LaunchedEffect
+        if (prev != null && next != null) return@LaunchedEffect
+        snapshotFlow { pagerState.currentPage to pagerState.currentPageOffsetFraction }
+            .collect { (page, frac) ->
+                val last = pageItems.lastIndex
+                // frac > 0：正朝「下一章」方向拖；frac < 0：正朝「上一章」方向拖。
+                val blockedHead = prev == null && (page == 0 || (page == 1 && frac < -0.02f))
+                val blockedTail = next == null && (page == last || (page == last - 1 && frac > 0.02f))
+                when {
+                    blockedHead -> runCatching { pagerState.scrollToPage(1) }
+                    blockedTail -> runCatching { pagerState.scrollToPage(last - 1) }
+                }
+            }
+    }
 
     // 换章后归位：普通入口回到正文第 1 页（第 0 页是「上一章」占位）；
     // 若是「往右划回到上一章」触发的换章，则落到该章最后一页（末页是「下一章」占位）。

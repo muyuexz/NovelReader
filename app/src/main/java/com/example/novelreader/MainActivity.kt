@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -128,6 +129,12 @@ private fun NovelApp() {
     var searching by remember { mutableStateOf(false) }
     var hasSearched by remember { mutableStateOf(false) }
     var hits by remember { mutableStateOf(listOf<Book>()) }
+    // 第 28 批：搜索结果列表的滚动状态提到这一层持有。
+    // 之前 listState 建在 SearchScreen 内部，一点进详情页，顶层状态机就走 DetailScreen 分支，
+    // 整个首页（含 SearchScreen）被移出合成 → rememberLazyListState 连同滚动位置一起销毁，
+    // 返回时列表重建只能停在第一条。提到条件链之外，位置才能跨详情页存活。
+    // 「新搜索回到顶部」的原有意图不变：发起新搜索时换成全新实例即可。
+    var searchListState by remember { mutableStateOf(LazyListState()) }
 
     // 目录
     var currentBook by remember { mutableStateOf<Book?>(null) }
@@ -632,6 +639,9 @@ private fun NovelApp() {
                             if (k.isNotEmpty() && !searching) {
                                 searching = true
                                 hasSearched = true
+                                // 第 28 批：新搜索换一份全新的滚动状态 → 结果必定从第一条开始；
+                                // 从详情页返回不会走这里，位置自然保留。
+                                searchListState = LazyListState()
                                 hits = emptyList()
                                 scope.launch {
                                     // 回调是全量有序快照（已按匹配度/源权重排序），整体替换即可。
@@ -641,6 +651,7 @@ private fun NovelApp() {
                             }
                         },
                         onOpen = openDetail,
+                        listState = searchListState,
                     )
                 } else {
                     SourceManagerScreen(
@@ -757,12 +768,10 @@ private fun SearchScreen(
     sourcesLoaded: Boolean,
     onSearch: () -> Unit,
     onOpen: (Book) -> Unit,
+    // 第 28 批：滚动状态改由调用方持有（NovelApp 里的 searchListState），
+    // 从详情页返回时位置还在；「新搜索回顶」由调用方换新实例实现。
+    listState: LazyListState,
 ) {
-    val listState = rememberLazyListState()
-    // 第 1 条：每次结果刷新后回到顶部，不再停留在上次的滚动位置
-    LaunchedEffect(hits) {
-        if (hits.isNotEmpty()) runCatching { listState.scrollToItem(0) }
-    }
     Column(
         Modifier
             .fillMaxSize()
