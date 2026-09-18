@@ -596,11 +596,19 @@ private fun NovelApp() {
                     ShelfScreen(
                         entries = shelfEntries,
                         onOpen = { entry ->
-                            openDetail(entry.toBook(SourceRepository.findByKey(entry.sourceUrl)))
+                            openDetail(
+                                entry.toBook(
+                                    SourceRepository.findByKey(entry.sourceUrl),
+                                    SourceRepository::findByKey,
+                                ),
+                            )
                         },
                         onRead = { entry ->
                             openFromShelf(
-                                entry.toBook(SourceRepository.findByKey(entry.sourceUrl)),
+                                entry.toBook(
+                                    SourceRepository.findByKey(entry.sourceUrl),
+                                    SourceRepository::findByKey,
+                                ),
                                 entry,
                             )
                         },

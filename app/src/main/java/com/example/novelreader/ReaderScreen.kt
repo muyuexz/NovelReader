@@ -667,7 +667,10 @@ fun ReaderScreen(
                                     items = options,
                                     key = { i, b -> "ss-" + i + "-" + b.bookUrl + "@" + b.originName },
                                 ) { i, opt ->
-                                    val cur = i == 0
+                                    // 第 27 批：当前源按「书地址 + 书源」判定，不再硬编码首条。
+                                    val cur = base != null &&
+                                        opt.bookUrl == base.bookUrl &&
+                                        opt.source?.bookSourceUrl == base.source?.bookSourceUrl
                                     Column(
                                         Modifier
                                             .fillMaxWidth()

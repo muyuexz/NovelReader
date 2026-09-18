@@ -145,16 +145,26 @@ object SourceRepository {
         // 每次快照都是全量重排，先清空历史挂载，避免上一轮的兄弟源残留。
         list.forEach { it.altSources = emptyList() }
         val out = ArrayList<Book>()
-        val index = HashMap<String, Book>()
+        // 第 27 批：先按 key 收集每组的全部成员，聚合完再「对称」互相挂载。
+        // 第 26 批的缺陷：只有代表书挂上了兄弟表，用户一旦换源切到非代表书，
+        // 新 currentBook 的 altSources 是空的，换源弹窗就只剩它自己。
+        val groups = LinkedHashMap<String, MutableList<Book>>()
         for (b in list) {
             val n = normalize(b.name)
-            val key = n + "\u0001" + normalize(b.author)
-            val first = if (n.isEmpty()) null else index[key]
-            if (first == null) {
-                if (n.isNotEmpty()) index[key] = b
+            if (n.isEmpty()) {
                 out += b
-            } else {
-                first.altSources = first.altSources + b
+                continue
+            }
+            val key = n + "\u0001" + normalize(b.author)
+            val g = groups.getOrPut(key) { ArrayList() }
+            if (g.isEmpty()) out += b
+            g += b
+        }
+        // 同组每个成员都能看到「除自己以外的全部兄弟源」，换到哪一本都列得全。
+        for (g in groups.values) {
+            if (g.size <= 1) continue
+            for (b in g) {
+                b.altSources = g.filter { it !== b }
             }
         }
         return out

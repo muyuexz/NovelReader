@@ -15,6 +15,20 @@ import kotlinx.serialization.json.Json
  * 刻意不引 Room / KSP —— `app/build.gradle.kts` 明确写了不跑注解处理器，
  * 这点保持不动，书架的持久化只需要「读一次、整体覆写」的语义。
  */
+/**
+ * 第 27 批：书架条目里保存的「兄弟书源」引用。
+ *
+ * 只留重建换源列表所需的最小字段：书源地址 + 该书在该源上的书地址 / 目录地址。
+ * 还原时由调用方用 [SourceRepository.findByKey] 把书源对象查回来。
+ */
+@Serializable
+data class AltSourceRef(
+    val sourceUrl: String,
+    val bookUrl: String,
+    val tocUrl: String = "",
+    val originName: String = "",
+)
+
 @Serializable
 data class ShelfEntry(
     val bookUrl: String,
@@ -37,12 +51,17 @@ data class ShelfEntry(
     val lastReadAt: Long = 0L,
     /** 第13批：页内位置（1 基正文页；0 = 未记录，按第 1 页起步）。 */
     val lastReadPage: Int = 0,
+    /** 第 27 批：这本书在其它书源上的副本（同名 + 同作者聚合时挂上的兄弟源）。 */
+    val altSources: List<AltSourceRef> = emptyList(),
 ) {
     /** 书架内的唯一键：书源地址 + 书地址。 */
     val key: String get() = sourceUrl + "|" + bookUrl
 
     /** 用书源对象把条目还原成「能继续拉目录 / 读正文」的 [Book]。 */
-    fun toBook(source: BookSource?): Book = Book(
+    fun toBook(
+        source: BookSource?,
+        resolveSource: (String) -> BookSource? = { null },
+    ): Book = Book(
         bookUrl = bookUrl,
         name = name,
         author = author,
@@ -54,7 +73,22 @@ data class ShelfEntry(
         lastChapter = lastChapter,
         origin = origin,
         originName = originName,
-    ).also { it.source = source }
+    ).also { bk ->
+        bk.source = source
+        // 第 27 批：兄弟源一并还原，否则「从书架进入阅读页」也只看到 1 个源。
+        // 查不到书源对象（源被删）的兄弟直接丢弃，避免换源点下去静默失败。
+        bk.altSources = altSources.mapNotNull { ref ->
+            val s = resolveSource(ref.sourceUrl) ?: return@mapNotNull null
+            Book(
+                bookUrl = ref.bookUrl,
+                name = name,
+                author = author,
+                tocUrl = ref.tocUrl,
+                origin = ref.sourceUrl,
+                originName = ref.originName,
+            ).also { it.source = s }
+        }
+    }
 
     companion object {
         const val NO_CHAPTER = -1
@@ -82,6 +116,17 @@ data class ShelfEntry(
             lastReadChapterIndex = old?.lastReadChapterIndex ?: NO_CHAPTER,
             lastReadAt = old?.lastReadAt ?: 0L,
             lastReadPage = old?.lastReadPage ?: 0,
+            // 第 27 批：把当前聚合到的兄弟源一并落盘。
+            // 新的聚合结果为空时保留旧记录，避免「从书架还原后再加一次书架」把兄弟源清掉。
+            altSources = run {
+                val fresh = book.altSources.mapNotNull { s ->
+                    val u = s.source?.bookSourceUrl?.takeIf { it.isNotBlank() }
+                        ?: s.origin.takeIf { it.isNotBlank() }
+                    if (u.isNullOrBlank()) null
+                    else AltSourceRef(u, s.bookUrl, s.tocUrl, s.originName)
+                }
+                if (fresh.isNotEmpty()) fresh else old?.altSources ?: emptyList()
+            },
         )
     }
 }
