@@ -119,7 +119,9 @@ fun ReaderScreen(
     // 分页结果：首尾各挂一张「上一章 / 下一章」占位页，翻到头就等于换章。
     var pageItems by remember { mutableStateOf(listOf<String>()) }
     var pagesChapter by remember { mutableStateOf("") }
-    var navLock by remember(chapter.url) { mutableStateOf(false) }
+    // 第8批：navLock 如果随 chapter.url 重建，换章瞬间会被重置为 false，
+    // 导致边界效应在「旧分页 + 新章」的组合下重复触发，一次连跳多章。
+    var navLock by remember { mutableStateOf(false) }
 
     val pagerState = rememberPagerState(pageCount = { pageItems.size.coerceAtLeast(1) })
 
@@ -127,6 +129,8 @@ fun ReaderScreen(
     LaunchedEffect(chapter.url, pagesChapter) {
         if (pagesChapter == chapter.url && pageItems.size > 1) {
             runCatching { pagerState.scrollToPage(1) }
+            // 第8批：确认已回到本正文首页，才解除换章锁
+            navLock = false
         }
     }
 
@@ -143,7 +147,8 @@ fun ReaderScreen(
         // —— 顶部栏（浮层：不再挤压正文高度，点按切换工具条时不重分页、字不跳）——
         AnimatedVisibility(
             visible = barsVisible,
-            modifier = Modifier.align(Alignment.TopCenter),
+            // 第8批：顶栏必须在正文层之上，否则被每页不透明底色整个盖住（顶栏“消失”）
+            modifier = Modifier.align(Alignment.TopCenter).zIndex(1f),
         ) {
             Surface(color = palette.panel) {
                 Row(
@@ -202,6 +207,9 @@ fun ReaderScreen(
                     ) {
                         // 第 7 批第 6 条：不再等滚动停稳，翻到首/末过渡页立即换章，
                         // 过渡页本身不渲染任何「上一章/下一章」文字，视觉上直接进入下一章。
+                        // 第8批：pageItems 必须已属于当前章，否则 currentPage 还是
+                        // 上一章的边界值（0 / lastIndex），换章瞬间会重复触发上一/下一章。
+                        if (pagesChapter != chapter.url) return@LaunchedEffect
                         if (navLock) return@LaunchedEffect
                         if (pageItems.size < 3) return@LaunchedEffect
                         when (pagerState.currentPage) {
@@ -297,7 +305,7 @@ fun ReaderScreen(
         // —— 设置面板 + 底部翻章栏（浮层）——
         AnimatedVisibility(
             visible = barsVisible,
-            modifier = Modifier.align(Alignment.BottomCenter),
+            modifier = Modifier.align(Alignment.BottomCenter).zIndex(1f),
         ) {
             Column {
                 if (showPanel) {
@@ -439,6 +447,7 @@ fun ReaderScreen(
             Box(
                 Modifier
                     .fillMaxSize()
+                    .zIndex(2f)
                     .background(Color.Black.copy(alpha = 0.45f))
                     .clickable { showCacheDialog = false },
             ) {
@@ -508,6 +517,7 @@ fun ReaderScreen(
             Box(
                 Modifier
                     .fillMaxSize()
+                    .zIndex(2f)
                     .background(Color.Black.copy(alpha = 0.45f)),
             ) {
                 Surface(
