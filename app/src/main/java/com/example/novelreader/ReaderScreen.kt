@@ -343,7 +343,8 @@ fun ReaderScreen(
             } else {
                 BoxWithConstraints(Modifier.fillMaxSize()) {
                     val availW = with(density) { (maxWidth - 44.dp).toPx() }
-                    val availH = with(density) { (maxHeight - 32.dp).toPx() }
+                    // 第 33 批：底部新增「正文 / 长横线 / 页码」留白带，正文可用高再扣 24dp。
+                    val availH = with(density) { (maxHeight - 56.dp).toPx() }
                     // 第 30 批：每章第一页开头标出当前目录章节（顶格、与正文空一行）。
                     // 第 32 批：目录标题若已自带「第X章」，不再叠加序号，避免「第3章第3章…」。
                     val rawTitle = chapter.title.trim()
@@ -388,15 +389,28 @@ fun ReaderScreen(
 
                     // 第 32 批：正文区右下角常显（对齐 Legado）——本章页码/总页数 + 全书已阅读百分比。
                     // 顶栏/底栏是浮层，此浮标固定吊在正文区右下角；底栏弹出时被底栏盖住，不重复显示。
-                    Text(
-                        text = curPage.coerceAtLeast(1).toString() + "/" + totalPages + " " + bookPercent + "%",
-                        color = palette.sub,
-                        fontSize = 11.sp,
+                    // 第 33 批：正文与页码之间用一条长横线分隔，线上下各留距离（上约 13dp / 下 8dp）。
+                    Column(
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
-                            .padding(end = 22.dp, bottom = 2.dp)
+                            .fillMaxWidth()
+                            .padding(start = 22.dp, end = 22.dp, bottom = 4.dp)
                             .zIndex(2f),
-                    )
+                        horizontalAlignment = Alignment.End,
+                    ) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .height(1.dp)
+                                .background(palette.sub.copy(alpha = 0.35f)),
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = curPage.coerceAtLeast(1).toString() + "/" + totalPages + " " + bookPercent + "%",
+                            color = palette.sub,
+                            fontSize = 11.sp,
+                        )
+                    }
 
                     if (pageItems.isEmpty()) {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -465,7 +479,7 @@ fun ReaderScreen(
                                                     barsVisible = !barsVisible
                                                 }
                                             }
-                                            .padding(horizontal = 22.dp, vertical = 16.dp),
+                                            .padding(start = 22.dp, end = 22.dp, top = 16.dp, bottom = 40.dp),
                                     ) {
                                         Text(
                                             // 第16批：正文里把搜索结果的关键字标黄，跳过来一眼就能看到。
