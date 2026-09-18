@@ -131,7 +131,7 @@ fun ReaderScreen(
     var navLock by remember { mutableStateOf(false) }
     // 第9批：记录「往右划回到上一章」这次换章的目标章 url。归位时若命中，
     // 就落到该章最后一页而不是第一页，这才是正常的「往前翻」体验。
-    var enterEndChapter by remember { mutableStateOf<String?>() }
+    var enterEndChapter by remember { mutableStateOf<String?>(null) }
 
     val pagerState = rememberPagerState(pageCount = { pageItems.size.coerceAtLeast(1) })
 
