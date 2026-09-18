@@ -213,10 +213,14 @@ fun BookCard(book: Book, onClick: () -> Unit) {
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                if (!book.lastChapter.isNullOrBlank()) {
+                if (book.chapterCount > 0 || !book.lastChapter.isNullOrBlank()) {
                     Spacer(Modifier.height(3.dp))
+                    val tail = listOfNotNull(
+                        book.chapterCount.takeIf { it > 0 }?.let { "共 ${it}章" },
+                        book.lastChapter?.takeIf { it.isNotBlank() }?.let { "最新 $it" },
+                    ).joinToString(" · ")
                     Text(
-                        text = "最新　${book.lastChapter}",
+                        text = tail,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,

@@ -24,6 +24,12 @@ class Book(
     var variable: String? = null,
 ) : BookLike, RuleDataInterface {
 
+    /**
+     * 目录真实章节数。搜索阶段书源通常不给（或给的是错的），
+     * 拉到目录后用 chapters.size 回填，搜索卡片 / 详情页据此显示一致的数字。
+     */
+    var chapterCount: Int = 0
+
     /** 命中该书源；搜索阶段回填，供详情/目录/正文复用同一条书源的规则与请求头。 */
     var source: BookSource? = null
 

@@ -169,7 +169,7 @@ fun ReaderScreen(
                 BoxWithConstraints(Modifier.fillMaxSize()) {
                     val availW = with(density) { (maxWidth - 44.dp).toPx() }
                     val availH = with(density) { (maxHeight - 32.dp).toPx() }
-                    val body = content.ifBlank { "（正文为空）" }
+                    val body = indentParagraphs(content.ifBlank { "（正文为空）" })
                     val contentPages = remember(body, availW, availH, textStyle) {
                         paginate(measurer, body, textStyle, availW, availH)
                     }
@@ -440,6 +440,19 @@ private fun JumpPage(
  *  再按页高把行累积成页；页边界取该页最后一行的行尾偏移量，
  *  保证换行、段落空行都不会被切坏。
  * ------------------------------------------------------------------ */
+/**
+ * 段落首行缩进：给每个非空段落行首补两个全角空格。
+ *
+ * 刻意放在"分页之前"而不是渲染时才缩进——这样 [paginate] 测量到的
+ * 换行与行高就是屏幕最终显示的样子，页码、切分点和实际排版天然一致。
+ */
+private fun indentParagraphs(body: String): String {
+    if (body.isBlank()) return body
+    return body.split('\n').joinToString("\n") { line ->
+        if (line.isBlank()) line else "\u3000\u3000" + line.trimStart()
+    }
+}
+
 private fun paginate(
     measurer: TextMeasurer,
     body: String,

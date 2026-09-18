@@ -3,6 +3,7 @@ package com.example.novelreader
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.BackHandler
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
@@ -18,7 +19,6 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -36,10 +36,11 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -128,8 +129,8 @@ private fun NovelApp() {
     // 记录最近阅读的章节，返回目录时可高亮
     var lastChapterUrl by remember { mutableStateOf<String?>(null) }
 
-    // 书架 / 详情页
-    var showShelf by remember { mutableStateOf(false) }
+    // 首页 Tab（0 = 书架，1 = 发现/搜索）/ 详情页
+    var homeTab by remember { mutableStateOf(0) }
     var showDetail by remember { mutableStateOf(false) }
     var detailBook by remember { mutableStateOf<Book?>(null) }
     var shelfEntries by remember { mutableStateOf(listOf<ShelfEntry>()) }
@@ -171,6 +172,12 @@ private fun NovelApp() {
                 }.getOrDefault(emptyList())
             }
             chapters = list
+            if (list.isNotEmpty()) {
+                // 目录抓全后回填真实章节数与最新章节，
+                // 修正书源搜索规则里可能过时/错误的 lastChapter（如只给到第 81 章）。
+                book.chapterCount = list.size
+                list.lastOrNull()?.title?.takeIf { it.isNotBlank() }?.let { book.lastChapter = it }
+            }
             if (list.isEmpty()) tocError = "目录解析为空（书源规则不匹配或网络失败）"
             loadingToc = false
             // 详情拿到了就顺手刷进书架（不在书架里则无操作）
@@ -207,6 +214,36 @@ private fun NovelApp() {
 
     val openBookNow = currentBook
     val openChapter = currentChapter
+
+    // 系统返回（返回手势 / 返回键）接入：与各页左上角按钮走同一套回退逻辑。
+    // 层级：正文章 → 详情 → 目录 → 发现页 → 书架 → 退出 App。
+    // 只在"还有上一级"的状态下拦截，根页面交还系统。
+    BackHandler(enabled = openBookNow != null || homeTab == 1) {
+        when {
+            openChapter != null -> {
+                currentChapter = null
+                content = ""
+            }
+            showDetail -> {
+                showDetail = false
+                detailBook = null
+                currentBook = null
+                chapters = emptyList()
+                tocError = null
+            }
+            openBookNow != null -> {
+                // 目录页：有详情来源就退回详情，否则直接回首页
+                if (detailBook != null) {
+                    showDetail = true
+                } else {
+                    currentBook = null
+                    chapters = emptyList()
+                    tocError = null
+                }
+            }
+            else -> homeTab = 0
+        }
+    }
 
     // —— 详情页 / 书架派生状态 ——
     val detailNow = detailBook
@@ -254,6 +291,10 @@ private fun NovelApp() {
                 }.getOrDefault(emptyList())
             }
             chapters = list
+            if (list.isNotEmpty()) {
+                book.chapterCount = list.size
+                list.lastOrNull()?.title?.takeIf { it.isNotBlank() }?.let { book.lastChapter = it }
+            }
             loadingToc = false
             if (list.isEmpty()) {
                 tocError = "目录解析为空（书源规则不匹配或网络失败）"
@@ -313,54 +354,75 @@ private fun NovelApp() {
             onOpen = { ch -> loadChapter(ch) },
         )
 
-        showShelf -> ShelfScreen(
-            entries = shelfEntries,
-            onBack = { showShelf = false },
-            onOpen = { entry ->
-                showShelf = false
-                openDetail(entry.toBook(SourceRepository.findByKey(entry.sourceUrl)))
-            },
-            onRead = { entry ->
-                showShelf = false
-                openFromShelf(
-                    entry.toBook(SourceRepository.findByKey(entry.sourceUrl)),
-                    entry,
-                )
-            },
-            onRemove = { entry ->
-                ShelfRepository.removeBy(context, entry.bookUrl, entry.sourceUrl)
-                refreshShelf()
-            },
-        )
-
-        else -> SearchScreen(
-            keyword = keyword,
-            onKeywordChange = { keyword = it },
-            searching = searching,
-            hasSearched = hasSearched,
-            hits = hits,
-            sourceCount = sourceCount,
-            sourceFailed = sourceFailed,
-            sourcesLoaded = sourcesLoaded,
-            onSearch = {
-                val k = keyword.trim()
-                if (k.isNotEmpty() && !searching) {
-                    searching = true
-                    hasSearched = true
-                    hits = emptyList()
-                    scope.launch {
-                        // 回调是全量有序快照（已按匹配度/源权重排序），整体替换即可。
-                        SourceRepository.search(k) { ranked -> hits = ranked }
-                        searching = false
-                    }
+        // —— 首页：底部 Tab（书架 / 发现），不再有多余的返回入口 ——
+        else -> Column(
+            Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background),
+        ) {
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                if (homeTab == 0) {
+                    ShelfScreen(
+                        entries = shelfEntries,
+                        onOpen = { entry ->
+                            openDetail(entry.toBook(SourceRepository.findByKey(entry.sourceUrl)))
+                        },
+                        onRead = { entry ->
+                            openFromShelf(
+                                entry.toBook(SourceRepository.findByKey(entry.sourceUrl)),
+                                entry,
+                            )
+                        },
+                        onRemove = { entry ->
+                            ShelfRepository.removeBy(context, entry.bookUrl, entry.sourceUrl)
+                            refreshShelf()
+                        },
+                    )
+                } else {
+                    SearchScreen(
+                        keyword = keyword,
+                        onKeywordChange = { keyword = it },
+                        searching = searching,
+                        hasSearched = hasSearched,
+                        hits = hits,
+                        sourceCount = sourceCount,
+                        sourceFailed = sourceFailed,
+                        sourcesLoaded = sourcesLoaded,
+                        onSearch = {
+                            val k = keyword.trim()
+                            if (k.isNotEmpty() && !searching) {
+                                searching = true
+                                hasSearched = true
+                                hits = emptyList()
+                                scope.launch {
+                                    // 回调是全量有序快照（已按匹配度/源权重排序），整体替换即可。
+                                    SourceRepository.search(k) { ranked -> hits = ranked }
+                                    searching = false
+                                }
+                            }
+                        },
+                        onOpen = openDetail,
+                    )
                 }
-            },
-            onOpen = openDetail,
-            onOpenShelf = {
-                refreshShelf()
-                showShelf = true
-            },
-        )
+            }
+            NavigationBar {
+                NavigationBarItem(
+                    selected = homeTab == 0,
+                    onClick = {
+                        refreshShelf()
+                        homeTab = 0
+                    },
+                    icon = { Text("📚", fontSize = 18.sp) },
+                    label = { Text("书架") },
+                )
+                NavigationBarItem(
+                    selected = homeTab == 1,
+                    onClick = { homeTab = 1 },
+                    icon = { Text("🔍", fontSize = 18.sp) },
+                    label = { Text("发现") },
+                )
+            }
+        }
     }
 }
 
@@ -379,13 +441,11 @@ private fun SearchScreen(
     sourcesLoaded: Boolean,
     onSearch: () -> Unit,
     onOpen: (Book) -> Unit,
-    onOpenShelf: () -> Unit,
 ) {
     Column(
         Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .windowInsetsPadding(WindowInsets.navigationBars),
+            .background(MaterialTheme.colorScheme.background),
     ) {
         // —— Hero 头部：渐变延伸到状态栏下 ——
         Column(
@@ -397,11 +457,8 @@ private fun SearchScreen(
                 .padding(start = 22.dp, end = 22.dp, top = 22.dp, bottom = 22.dp),
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("轻阅读", style = MaterialTheme.typography.headlineMedium, color = Color.White)
+                Text("发现", style = MaterialTheme.typography.headlineMedium, color = Color.White)
                 Spacer(Modifier.weight(1f))
-                TextButton(onClick = onOpenShelf) {
-                    Text("我的书架", color = Color.White, style = MaterialTheme.typography.labelLarge)
-                }
             }
             Spacer(Modifier.height(5.dp))
             Text(

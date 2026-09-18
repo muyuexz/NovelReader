@@ -13,7 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -39,7 +39,7 @@ import com.example.novelreader.ui.StateBlock
 @Composable
 fun ShelfScreen(
     entries: List<ShelfEntry>,
-    onBack: () -> Unit,
+    onBack: (() -> Unit)? = null,
     onOpen: (ShelfEntry) -> Unit,
     onRead: (ShelfEntry) -> Unit,
     onRemove: (ShelfEntry) -> Unit,
@@ -48,7 +48,7 @@ fun ShelfScreen(
         Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
-            .windowInsetsPadding(WindowInsets.systemBars),
+            .windowInsetsPadding(WindowInsets.statusBars),
     ) {
         AppHeader(
             title = "我的书架",
