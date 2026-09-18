@@ -259,6 +259,25 @@ private fun NovelApp() {
         }
     }
 
+    // 第 5 条：离线缓存区间（从第 a 章到第 b 章，1 基、含端点）。
+    // 串行拉取、去重，写进 contentCache；之后翻到这些章节即秒开，不用每次在线等。
+    val cacheRange: (Int, Int) -> Unit = cr@{ a, bEnd ->
+        val b = currentBook ?: return@cr
+        val src = b.source ?: return@cr
+        val list = chapters
+        if (list.isEmpty()) return@cr
+        scope.launch(Dispatchers.IO) {
+            val lo = a.coerceIn(1, list.size)
+            val hi = bEnd.coerceIn(lo, list.size)
+            for (i in lo..hi) {
+                val c = list[i - 1]
+                if (!contentCache.containsKey(c.url) && prefetching.add(c.url)) {
+                    val t = runCatching { BookSourceEngine.getContent(src, b, c) }.getOrDefault("")
+                    if (t.isNotBlank()) contentCache[c.url] = t else prefetching.remove(c.url)
+                }
+            }
+        }
+    }
     val openBookNow = currentBook
     val openChapter = currentChapter
 
@@ -275,6 +294,8 @@ private fun NovelApp() {
                 currentChapter = null
                 content = ""
                 showReaderToc = false
+                // 第 7 批第 2 条：从详情页进来的，返回阅读页要回详情页（而不是掉到目录页）
+                if (detailBook != null) showDetail = true
             }
             showDetail -> {
                 showDetail = false
@@ -363,6 +384,8 @@ private fun NovelApp() {
             chapters = chapters,
             onOpenChapter = loadChapter,
             onOpenToc = { showReaderToc = true },
+            onCacheRange = cacheRange,
+            cache = contentCache,
         )
 
         // 阅读页点「目录」：目录叠在阅读之上，选中章节后回到阅读
@@ -377,6 +400,7 @@ private fun NovelApp() {
                 showReaderToc = false
                 loadChapter(ch)
             },
+            cachedUrls = contentCache.keys,
         )
 
         openBookNow != null && showDetail -> DetailScreen(
@@ -386,14 +410,14 @@ private fun NovelApp() {
             error = tocError,
             inShelf = inShelf,
             onToggleShelf = onToggleShelf,
-            onRead = {
-                // 第 4 条：底部右侧「阅读」→ 直接开读（有进度续读，否则第一章）
-                val target = continueChapter
-                if (target != null) {
-                    showDetail = false
-                    loadChapter(target)
-                }
-            },
+                onRead = {
+                    // 第 4 条：底部右侧「阅读」→ 直接开读（有进度续读，否则第一章）。
+                    // 第 7 批第 2 条：不再清掉 showDetail，阅读页返回时才能回详情页而非目录页。
+                    val target = continueChapter
+                    if (target != null) {
+                        loadChapter(target)
+                    }
+                },
             onRetry = { openBook(openBookNow) },
         )
 
@@ -413,6 +437,7 @@ private fun NovelApp() {
                 }
             },
             onOpen = { ch -> loadChapter(ch) },
+            cachedUrls = contentCache.keys,
         )
 
         // —— 首页：底部 Tab（书架 / 发现），不再有多余的返回入口 ——
@@ -648,6 +673,7 @@ private fun TocScreen(
     error: String?,
     onBack: () -> Unit,
     onOpen: (BookChapter) -> Unit,
+    cachedUrls: Set<String> = emptySet(),
 ) {
     var query by remember { mutableStateOf("") }
     val filtered = remember(query, chapters) {
@@ -721,7 +747,7 @@ private fun TocScreen(
                 ) {
                     itemsIndexed(filtered, key = { _, ch -> ch.url + "|" + ch.index }) { pos, ch ->
                         val current = currentChapterUrl != null && ch.url == currentChapterUrl
-                        ChapterRow(index = pos + 1, chapter = ch, current = current) { onOpen(ch) }
+                        ChapterRow(index = pos + 1, chapter = ch, current = current, cached = cachedUrls.contains(ch.url)) { onOpen(ch) }
                     }
                 }
             }
@@ -734,6 +760,7 @@ private fun ChapterRow(
     index: Int,
     chapter: BookChapter,
     current: Boolean,
+    cached: Boolean,
     onClick: () -> Unit,
 ) {
     val primary = MaterialTheme.colorScheme.primary
@@ -763,6 +790,10 @@ private fun ChapterRow(
         if (chapter.isVip || chapter.isPay) {
             Spacer(Modifier.width(8.dp))
             TagPill(if (chapter.isPay) "付费" else "VIP")
+        }
+        if (cached) {
+            Spacer(Modifier.width(8.dp))
+            TagPill("已缓存")
         }
     }
 }

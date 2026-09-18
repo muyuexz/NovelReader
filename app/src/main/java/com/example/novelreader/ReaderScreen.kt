@@ -20,11 +20,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -76,6 +80,8 @@ fun ReaderScreen(
     chapters: List<BookChapter>,
     onOpenChapter: (BookChapter) -> Unit,
     onOpenToc: () -> Unit,
+    onCacheRange: (Int, Int) -> Unit = { _, _ -> },
+    cache: Map<String, String> = emptyMap(),
 ) {
     val context = LocalContext.current
     val prefs = remember {
@@ -91,6 +97,12 @@ fun ReaderScreen(
     }
     var showPanel by remember { mutableStateOf(false) }
     var barsVisible by remember { mutableStateOf(true) }
+    // 第 7 批：顶栏两个新入口的状态
+    var showCacheDialog by remember { mutableStateOf(false) }
+    var showSearch by remember { mutableStateOf(false) }
+    var cacheFrom by remember { mutableStateOf("") }
+    var cacheTo by remember { mutableStateOf("") }
+    var searchKeyword by remember { mutableStateOf("") }
     val palette = ReaderPalettes.firstOrNull { it.id == paletteId } ?: ReaderPalettes.first()
 
     val density = LocalDensity.current
@@ -122,14 +134,17 @@ fun ReaderScreen(
     val curPage = pagerState.currentPage.coerceIn(0, totalPages)
     val percent = (((curPage - 1).coerceAtLeast(0)) * 100 / totalPages).coerceIn(0, 100)
 
-    Column(
+    Box(
         Modifier
             .fillMaxSize()
             .background(palette.bg)
             .windowInsetsPadding(WindowInsets.systemBars),
     ) {
-        // —— 顶部栏 ——
-        AnimatedVisibility(visible = barsVisible) {
+        // —— 顶部栏（浮层：不再挤压正文高度，点按切换工具条时不重分页、字不跳）——
+        AnimatedVisibility(
+            visible = barsVisible,
+            modifier = Modifier.align(Alignment.TopCenter),
+        ) {
             Surface(color = palette.panel) {
                 Row(
                     Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
@@ -147,15 +162,21 @@ fun ReaderScreen(
                         text = if (loading) "--" else "$percent%",
                         color = palette.sub,
                         fontSize = 12.sp,
-                        modifier = Modifier.padding(end = 6.dp),
+                        modifier = Modifier.padding(end = 2.dp),
                     )
-                    // 第 7 条：「目录」「Aa」已下沉到页面最底部，顶栏只留标题与进度
+                    // 第 7 批第 5/7 条：顶栏补两个入口——离线缓存、全文搜索
+                    TextButton(onClick = { showCacheDialog = true }) {
+                        Text("缓存", color = palette.fg, fontSize = 13.sp)
+                    }
+                    TextButton(onClick = { showSearch = true }) {
+                        Text("搜索", color = palette.fg, fontSize = 13.sp)
+                    }
                 }
             }
         }
 
-        // —— 正文：横向分页 + 翻页动画 ——
-        Box(Modifier.weight(1f).fillMaxWidth()) {
+        // —— 正文：横向分页 + 翻页动画（铺满整个阅读区，高度恒定）——
+        Box(Modifier.fillMaxSize()) {
             if (loading) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = palette.fg)
@@ -176,11 +197,12 @@ fun ReaderScreen(
                     // 翻到首/末占位页并停稳 → 换章
                     LaunchedEffect(
                         pagerState.currentPage,
-                        pagerState.isScrollInProgress,
                         pageItems.size,
                         chapter.url,
                     ) {
-                        if (navLock || pagerState.isScrollInProgress) return@LaunchedEffect
+                        // 第 7 批第 6 条：不再等滚动停稳，翻到首/末过渡页立即换章，
+                        // 过渡页本身不渲染任何「上一章/下一章」文字，视觉上直接进入下一章。
+                        if (navLock) return@LaunchedEffect
                         if (pageItems.size < 3) return@LaunchedEffect
                         when (pagerState.currentPage) {
                             0 -> prev?.let { navLock = true; onOpenChapter(it) }
@@ -233,18 +255,17 @@ fun ReaderScreen(
                                         ),
                                 )
                                 when {
-                                    page == 0 -> JumpPage(
-                                        label = "上一章",
-                                        target = prev,
-                                        palette = palette,
-                                        onGo = { t -> onOpenChapter(t) },
+                                    // 第 7 批第 6 条：首尾过渡页不再渲染「上一章/下一章」占位内容与章节标题，
+                                    // 只留可点的空白层；换章由上面的 LaunchedEffect 立即触发。
+                                    page == 0 -> Box(
+                                        Modifier
+                                            .fillMaxSize()
+                                            .clickable(enabled = prev != null) { prev?.let(onOpenChapter) },
                                     )
-
-                                    page == pageItems.lastIndex -> JumpPage(
-                                        label = "下一章",
-                                        target = next,
-                                        palette = palette,
-                                        onGo = { t -> onOpenChapter(t) },
+                                    page == pageItems.lastIndex -> Box(
+                                        Modifier
+                                            .fillMaxSize()
+                                            .clickable(enabled = next != null) { next?.let(onOpenChapter) },
                                     )
 
                                     else -> Box(
@@ -273,8 +294,11 @@ fun ReaderScreen(
             }
         }
 
-        // —— 设置面板 + 底部翻章栏 ——
-        AnimatedVisibility(visible = barsVisible) {
+        // —— 设置面板 + 底部翻章栏（浮层）——
+        AnimatedVisibility(
+            visible = barsVisible,
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
             Column {
                 if (showPanel) {
                     Surface(color = palette.panel) {
@@ -408,6 +432,148 @@ fun ReaderScreen(
             }
         }
     }
+        // ============================================================
+        // 第 7 批第 5 条：离线缓存弹窗（输入起止章，一次性缓存区间）
+        // ============================================================
+        if (showCacheDialog) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.45f))
+                    .clickable { showCacheDialog = false },
+            ) {
+                Surface(
+                    color = palette.panel,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(24.dp)
+                        .fillMaxWidth(),
+                ) {
+                    Column(Modifier.padding(18.dp)) {
+                        Text("离线缓存章节", color = palette.fg, fontSize = 16.sp)
+                        Spacer(Modifier.height(12.dp))
+                        Row(Modifier.fillMaxWidth()) {
+                            OutlinedTextField(
+                                value = cacheFrom,
+                                onValueChange = { s -> cacheFrom = s.filter { it.isDigit() } },
+                                label = { Text("起始章", fontSize = 12.sp) },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            OutlinedTextField(
+                                value = cacheTo,
+                                onValueChange = { s -> cacheTo = s.filter { it.isDigit() } },
+                                label = { Text("结束章", fontSize = 12.sp) },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = "共 " + chapters.size + " 章，缓存后可离线阅读",
+                            color = palette.sub,
+                            fontSize = 12.sp,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Row(Modifier.fillMaxWidth()) {
+                            Spacer(Modifier.weight(1f))
+                            TextButton(onClick = { showCacheDialog = false }) {
+                                Text("取消", color = palette.sub)
+                            }
+                            TextButton(onClick = {
+                                val lo = cacheFrom.toIntOrNull() ?: 1
+                                val hi = cacheTo.toIntOrNull() ?: chapters.size
+                                onCacheRange(lo, hi)
+                                showCacheDialog = false
+                            }) {
+                                Text("开始缓存", color = palette.fg)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ============================================================
+        // 第 7 批第 7 条：全文搜索弹窗（只搜已缓存正文，参照 Legado）
+        // ============================================================
+        if (showSearch) {
+            val hits = if (searchKeyword.isBlank()) {
+                emptyList<BookChapter>()
+            } else {
+                chapters.filter { c -> cache[c.url]?.contains(searchKeyword) == true }
+            }
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.45f)),
+            ) {
+                Surface(
+                    color = palette.panel,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(24.dp)
+                        .fillMaxWidth(),
+                ) {
+                    Column(Modifier.padding(18.dp)) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text("正文搜索", color = palette.fg, fontSize = 16.sp, modifier = Modifier.weight(1f))
+                            TextButton(onClick = { showSearch = false }) {
+                                Text("关闭", color = palette.sub)
+                            }
+                        }
+                        OutlinedTextField(
+                            value = searchKeyword,
+                            onValueChange = { searchKeyword = it },
+                            label = { Text("关键字", fontSize = 12.sp) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = "命中 " + hits.size + " 章（仅已缓存章节）",
+                            color = palette.sub,
+                            fontSize = 12.sp,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        LazyColumn(Modifier.fillMaxWidth().height(260.dp)) {
+                            items(hits) { c ->
+                                val body = cache[c.url].orEmpty()
+                                val at = body.indexOf(searchKeyword)
+                                val snippet = if (at >= 0) {
+                                    body.substring((at - 12).coerceAtLeast(0), (at + 40).coerceAtMost(body.length))
+                                } else {
+                                    ""
+                                }
+                                Column(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            showSearch = false
+                                            onOpenChapter(c)
+                                        }
+                                        .padding(vertical = 8.dp),
+                                ) {
+                                    Text(
+                                        text = "第 " + (chapters.indexOf(c) + 1) + " 章 " + c.title,
+                                        color = palette.fg,
+                                        fontSize = 14.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    if (snippet.isNotBlank()) {
+                                        Text(snippet, color = palette.sub, fontSize = 12.sp, maxLines = 2)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
 }
 }
 

@@ -68,12 +68,10 @@ fun DetailScreen(
             ?.trim()
             ?.takeIf { it.isNotBlank() }
     }
-    val kinds = remember(book.kind) {
-        (book.kind ?: "")
-            .split(',', '，', '、', '/', '|')
-            .map { it.trim() }
-            .filter { it.isNotBlank() }
-            .take(4)
+    // 第 1 条：书源「类型」常常缺失或给错（甚至塞进时间串），
+    // 先做合法性清洗，再退回书名 / 简介 / 最新章节里嗅探真实分类。
+    val kinds = remember(book.kind, intro, book.name, book.lastChapter) {
+        sanitizeKind(book.kind).ifEmpty { inferKind(book.name, intro, book.lastChapter) }
     }
     val chapterText = when {
         chapters.isNotEmpty() -> "${chapters.size}"
@@ -221,6 +219,38 @@ fun DetailScreen(
  * 状态兜底（第 2 条）：书源未给 status 时，从分类/简介里嗅「完结 / 连载」字样推断，
  * 总比一律显示「未知」有信息量。
  */
+/** 常见小说分类词典（第 1 条：类型嗅探用）。 */
+private val KIND_WORDS = listOf(
+    "武侠", "仙侠", "修仙", "玄幻", "奇幻", "灵异", "惊悚", "悬疑", "推理", "科幻",
+    "都市", "历史", "军事", "游戏", "体育", "现实", "言情", "古言", "现言", "青春",
+    "校园", "穿越", "重生", "系统", "种田", "无限", "末世", "二次元", "同人", "轻小说",
+)
+
+/**
+ * 清洗书源返回的「类型」字段。
+ * 日期串（2018-04-03 20:52:33）、纯数字、超长串一律判废；
+ * 剩余片段还要命中已知分类词才算数，避免把垃圾文案留在详情页。
+ */
+private fun sanitizeKind(raw: String?): List<String> {
+    val r = raw?.trim().orEmpty()
+    if (r.isBlank() || r.length > 20) return emptyList()
+    if (Regex("^[0-9:./\\-年月日\\s]+$").matches(r)) return emptyList()
+    val parts = r.split(',', '，', '、', '/', '|', ' ', ';', '；')
+        .map { it.trim() }
+        .filter { it.isNotBlank() && it.length <= 8 }
+        .filter { !Regex("^[0-9]+$").matches(it) }
+        .filter { Regex("[\\u4e00-\\u9fa5a-zA-Z]").containsMatchIn(it) }
+        .distinct()
+    val hit = parts.filter { p -> KIND_WORDS.any { w -> p.contains(w) || w.contains(p) } }
+    return if (hit.isNotEmpty()) hit else parts
+}
+
+/** 从书名 / 简介 / 最新章节里嗅探分类（第 1 条兜底）。 */
+private fun inferKind(name: String?, intro: String?, lastChapter: String?): List<String> {
+    val hay = (name ?: "") + " " + (intro ?: "") + " " + (lastChapter ?: "")
+    return KIND_WORDS.filter { hay.contains(it) }.distinct().take(4)
+}
+
 private fun inferStatus(kind: String?, intro: String?): String {
     val hay = (kind ?: "") + " " + (intro ?: "")
     return when {
