@@ -201,7 +201,6 @@ fun ReaderScreen(
                         HorizontalPager(
                             state = pagerState,
                             modifier = Modifier.fillMaxSize(),
-                            beyondViewportPageCount = 1,
                         ) { page ->
                             val item = pageItems.getOrNull(page) ?: ""
                             // offset：0 = 正落在屏上，1 = 已翻到左边，-1 = 还在右边等你翻
@@ -219,7 +218,7 @@ fun ReaderScreen(
                                     .graphicsLayer {
                                         // 以左侧书脊为轴掀起纸张；二次曲线让文字多留一会儿
                                         transformOrigin = TransformOrigin(0f, 0.5f)
-                                        cameraDistance = 14f * density
+                                        cameraDistance = 14f * density.density
                                         if (turning) rotationY = -88f * turn * turn
                                     },
                             ) {
