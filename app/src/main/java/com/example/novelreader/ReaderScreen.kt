@@ -38,6 +38,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -1132,7 +1133,9 @@ private fun FullTextSearchPage(
     // 第18批：结果列表滚动状态 + 一键跳首/尾。
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
-    val atBottom = !listState.canScrollForward && hits.isNotEmpty()
+    //第38批 E刀：滚动状态派生值。canScrollForward 是 State，直接在函数体里读，
+    //每滚一帧本面板都要重组一次；派生化之后只在「到底 / 没到底」翻转时才重组。
+    val atBottom by remember { derivedStateOf { !listState.canScrollForward && hits.isNotEmpty() } }
 
     val source = book?.source
 

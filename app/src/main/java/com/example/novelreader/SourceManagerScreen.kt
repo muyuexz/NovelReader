@@ -192,7 +192,9 @@ fun SourceManagerScreen(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            val allKeys = filtered.map { it.getKey() }.toSet()
+            //第38批 E刀：组合期集合运算 remember 化——筛选结果没变就不重算整张 key 集合
+            //（多选几百条书源时，点一下复选框过去都要重算一遍）。
+            val allKeys = remember(filtered) { filtered.map { it.getKey() }.toSet() }
             PillChip(
                 text = "全选",
                 selected = allKeys.isNotEmpty() && allKeys.all { it in selected },
@@ -252,7 +254,8 @@ fun SourceManagerScreen(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
             ) {
-                items(filtered) { src ->
+                //第38批 E刀：补齐全工程最后一个缺失的列表 key，条目复用与滚动位置更稳。
+                items(filtered, key = { it.getKey() }) { src ->
                     val key = src.getKey()
                     SourceRow(
                         name = src.bookSourceName.ifBlank { "(未命名书源)" },

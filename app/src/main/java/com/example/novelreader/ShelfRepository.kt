@@ -1,6 +1,7 @@
 package com.example.novelreader
 
 import android.content.Context
+import androidx.compose.runtime.Immutable
 import com.example.novelreader.analyzeRule.Book
 import com.example.novelreader.analyzeRule.BookChapter
 import com.example.novelreader.analyzeRule.BookSource
@@ -22,6 +23,7 @@ import kotlinx.serialization.json.Json
  * 还原时由调用方用 [SourceRepository.findByKey] 把书源对象查回来。
  */
 @Serializable
+@Immutable
 data class AltSourceRef(
     val sourceUrl: String,
     val bookUrl: String,
@@ -30,6 +32,7 @@ data class AltSourceRef(
 )
 
 @Serializable
+@Immutable
 data class ShelfEntry(
     val bookUrl: String,
     val name: String,

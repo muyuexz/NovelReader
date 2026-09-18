@@ -23,8 +23,19 @@ android {
 
     buildTypes {
         debug {
-            isMinifyEnabled = false
+            //第38批 F刀：debug 交付通道也开 R8 —— 缩未用代码 + 缩未用资源，
+            //交付的 APK 更小、冷启动更稳。
+            //包名后缀 .debug 与签名保持原样 => 工作流、抓包脚本、用户数据、
+            //覆盖安装全都不受影响；proguard-debug.pro 里 -dontobfuscate，
+            //CrashLogger 的堆栈继续可读。
+            isMinifyEnabled = true
+            isShrinkResources = true
             applicationIdSuffix = ".debug"
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+                "proguard-debug.pro"
+            )
         }
         release {
             isMinifyEnabled = true
