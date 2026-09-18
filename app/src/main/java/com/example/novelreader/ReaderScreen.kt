@@ -348,24 +348,48 @@ fun ReaderScreen(
                     // 第 30 批：每章第一页开头标出当前目录章节（顶格、与正文空一行）。
                     // 第 32 批：目录标题若已自带「第X章」，不再叠加序号，避免「第3章第3章…」。
                     val rawTitle = chapter.title.trim()
-                    val chapterLabel = if (rawTitle.isNotBlank()) {
-                        if (RE_CHAPTER_HEAD.containsMatchIn(rawTitle.take(12))) rawTitle
-                        else if (idx >= 0) "第 " + (idx + 1) + " 章 " + rawTitle else rawTitle
+                    // 第 37 批 C刀：章标题拼装是纯函数，键只有 (标题, 目录序号)。
+                    val chapterLabel = remember(rawTitle, idx) {
+                    if (rawTitle.isNotBlank()) {
+                    if (RE_CHAPTER_HEAD.containsMatchIn(rawTitle.take(12))) rawTitle
+                    else if (idx >= 0) "第 " + (idx + 1) + " 章 " + rawTitle else rawTitle
                     } else {
-                        ""
+                    ""
+                    }
                     }
                     // 第 32 批：正文首行常自带章标题，先剥离再拼 label，否则标题被渲染两次。
+                    // 第 37 批 C刀：整块预处理（剥章头 → 段落缩进 → 拼 label）产物是整章大小的
+                    // 新字符串，原来写在组合体里 —— 翻页动画期间 pagerState 每帧变化都会重组这里，
+                    // 等于每秒把整章正文切分/拼接几十遍。改用 remember 钉死，只在换章/换字号时重算。
+                    val body = remember(content, chapterLabel) {
                     val bodyText = if (chapterLabel.isBlank()) content.ifBlank { "（正文为空）" }
                     else stripLeadingChapterHead(content.ifBlank { "（正文为空）" })
-                    val body = indentParagraphs(bodyText).let { t ->
-                        if (chapterLabel.isBlank()) t else chapterLabel + "\n\n" + t
+                    indentParagraphs(bodyText).let { t ->
+                    if (chapterLabel.isBlank()) t else chapterLabel + "\n\n" + t
                     }
-                    val contentPages = remember(body, availW, availH, textStyle) {
-                        paginate(measurer, body, textStyle, availW, availH)
                     }
+                    // 第 37 批 C刀：分页（整章 TextMeasurer 排版 → 按页高切行成页）从组合期挪进协程。
+                    // 组合期只读 state，不再同步测量堵帧；后台测量若被系统限制而悄悄退化成单页，
+                    // 则在主线程重算一次兜底（注意这里仍在协程里，不是组合期）。
+                    // 旧页签保留到新页签算完 —— 下方的换章/翻页 effect 全部以 pagesChapter 为闸，
+                    // 计算期间它们不会误触发，不会出现「连跳多章」。
+                    val pagesState = remember { mutableStateOf<List<String>?>(null) }
+                    LaunchedEffect(body, availW, availH, textStyle) {
+                    val bg = withContext(Dispatchers.Default) {
+                    runCatching { paginate(measurer, body, textStyle, availW, availH, skipCache = true) }.getOrNull()
+                    }
+                    pagesState.value =
+                    if (bg == null || (bg.size == 1 && body.length > 1200)) {
+                    paginate(measurer, body, textStyle, availW, availH)
+                    } else {
+                    bg
+                    }
+                    }
+                    val contentPages = pagesState.value
                     LaunchedEffect(contentPages) {
-                        pageItems = listOf("") + contentPages + listOf("")
-                        pagesChapter = chapter.url
+                    val pages = contentPages ?: return@LaunchedEffect
+                    pageItems = listOf("") + pages + listOf("")
+                    pagesChapter = chapter.url
                     }
 
                     // 翻到首/末占位页并停稳 → 换章
@@ -1006,6 +1030,9 @@ private fun paginate(
     style: TextStyle,
     widthPx: Float,
     heightPx: Float,
+    // 第 37 批 C刀：从后台线程调用时必须置 true —— TextMeasurer 内部 TextLayoutCache
+    // 是非线程安全的 LruCache，后台测量与主线程兜底重算交错会踩缓存竞态。
+    skipCache: Boolean = false,
 ): List<String> {
     if (body.isBlank() || widthPx <= 1f || heightPx <= 1f) return listOf(body)
 
@@ -1014,6 +1041,7 @@ private fun paginate(
             text = body,
             style = style,
             constraints = Constraints(maxWidth = widthPx.toInt().coerceAtLeast(1)),
+            skipCache = skipCache,
         )
     }.getOrNull() ?: return listOf(body)
 

@@ -1,5 +1,7 @@
 package com.example.novelreader.analyzeRule
 
+import android.content.Context
+import okhttp3.Cache
 import okhttp3.Headers
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
@@ -8,6 +10,8 @@ import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import java.io.File
+import java.io.InterruptedIOException
 import java.nio.charset.Charset
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -139,9 +143,37 @@ internal object Network {
     /** CookieJar 伪头：出现即启用内存 Cookie 自动存取（对齐 Legado `cookieJarHeader`）。 */
     const val cookieJarHeader = "CookieJar"
 
+    /** 第 37 批 D刀：重试退避基数（毫秒）。 */
+    private const val RETRY_BACKOFF_BASE_MS = 300L
+
+    /** 第 37 批 D刀：HTTP 磁盘缓存目录，由 [initialize] 注入；未注入则缓存面整体不启用。 */
+    @Volatile
+    private var httpCacheDir: File? = null
+
+    /** 第 37 批 D刀：派生 Client 复用表（键 = 读超时/调用超时）。 */
+    private val derivedClients = ConcurrentHashMap<String, OkHttpClient>()
+
+    /**
+     * 第 37 批 D刀：网络层初始化，只在 Application.onCreate 调一次。
+     *
+     * 只做一件事 —— 把 App 私有缓存目录交给 OkHttp 做 HTTP 磁盘缓存。
+     * 重复调用安全；[client] 是 lazy，只要初始化早于首次请求即生效。
+     */
+    fun initialize(context: Context) {
+    if (httpCacheDir != null) return
+    val dir = File(context.cacheDir, "http_v1")
+    runCatching { dir.mkdirs() }
+    httpCacheDir = dir
+    }
+
     val client: OkHttpClient by lazy {
-        OkHttpClient.Builder()
-            .connectTimeout(30, TimeUnit.SECONDS)
+    OkHttpClient.Builder()
+    .apply {
+    // 第 37 批 D刀：20MB HTTP 磁盘缓存。只吃服务端 Cache-Control，
+    // 不强行改写响应头 —— 章节正文是动态内容，乱缓存会导致内容过期。
+    httpCacheDir?.let { dir -> runCatching { cache(Cache(dir, 20L * 1024 * 1024)) } }
+    }
+    .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
             .followRedirects(true)
@@ -172,7 +204,18 @@ internal object Network {
                 return executeOnce(req)
             } catch (e: Exception) {
                 lastError = e
-                if (attempt < req.retry) Thread.sleep(300L * (attempt + 1))
+                // 第 37 批 D刀：原为无条件 Thread.sleep，在 Dispatchers.IO 上白占一个线程且不可取消。
+                // 改为可中断等待：被中断（线程中断 / 取消信号）立即放弃重试并抛出，不再闷头睡满退避。
+                // 彻底非阻塞需要把整条请求链（BookSourceEngine 四个阶段 + JS 的 java.ajax）改成
+                // suspend，属更大一刀，另行评估后再动。
+                if (attempt < req.retry) {
+                try {
+                Thread.sleep(RETRY_BACKOFF_BASE_MS * (attempt + 1))
+                } catch (ie: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw InterruptedIOException("重试等待被中断: ${req.url}").also { it.initCause(ie) }
+                }
+                }
             }
         }
         throw lastError ?: IllegalStateException("请求失败: ${req.url}")
@@ -215,14 +258,20 @@ internal object Network {
         }
         requestBuilder.headers(headersBuilder.build())
 
+        // 第 37 批 D刀：派生 Client 复用。
+        // 先纠正上一轮我自己的一个误判：OkHttp 的 newBuilder() 会沿用同一个
+        // ConnectionPool 与 Dispatcher，所以「每请求新建 = 丢 keep-alive」并不成立；
+        // 真实开销是每请求多一次 Builder 深拷贝 + Client 分配。按 (读超时, 调用超时) 做键缓存。
         val effClient = if (req.readTimeoutMs != null || req.callTimeoutMs != null) {
-            client.newBuilder().apply {
-                req.readTimeoutMs?.let {
-                    readTimeout(it, TimeUnit.MILLISECONDS)
-                    callTimeout(it * 2, TimeUnit.MILLISECONDS)
-                }
-                req.callTimeoutMs?.let { callTimeout(it, TimeUnit.MILLISECONDS) }
-            }.build()
+        derivedClients.getOrPut("${req.readTimeoutMs}/${req.callTimeoutMs}") {
+        client.newBuilder().apply {
+        req.readTimeoutMs?.let {
+        readTimeout(it, TimeUnit.MILLISECONDS)
+        callTimeout(it * 2, TimeUnit.MILLISECONDS)
+        }
+        req.callTimeoutMs?.let { callTimeout(it, TimeUnit.MILLISECONDS) }
+        }.build()
+        }
         } else client
 
         effClient.newCall(requestBuilder.build()).execute().use { resp ->
