@@ -333,6 +333,56 @@ private fun NovelApp() {
             }
         }
     }
+    // ================================================================
+    // 第 26 批：换源回调。
+    // 复用 openBook 的取数链路（getBookInfo + getChapterList）把书切到新源，
+    // 目录到位后优先按「当前章节标题」定位同章，找不到才按原进度比例落点。
+    // 阅读页在此过程中保留旧正文，避免闪一下空白目录页。
+    // ================================================================
+    val switchSource: (Book) -> Unit = sw@{ nb ->
+        if (loadingToc) return@sw
+        val src = nb.source ?: return@sw
+        val anchorTitle = currentChapter?.title
+        val anchorUrl = currentChapter?.url
+        val anchorIdx = chapters.indexOfFirst { it.url == anchorUrl }
+        val ratio = if (chapters.isNotEmpty() && anchorIdx >= 0) {
+            anchorIdx.toFloat() / chapters.size.toFloat()
+        } else {
+            0f
+        }
+        currentBook = nb
+        chapters = emptyList()
+        tocError = null
+        lastChapterUrl = null
+        showReaderToc = false
+        loadingToc = true
+        scope.launch {
+            val list = withContext(Dispatchers.IO) {
+                runCatching {
+                    BookSourceEngine.getBookInfo(src, nb)
+                    BookSourceEngine.getChapterList(src, nb)
+                }.getOrDefault(emptyList())
+            }
+            chapters = list
+            if (list.isEmpty()) {
+                tocError = "换源失败：目录解析为空（书源规则不匹配或网络失败）"
+                loadingToc = false
+                return@launch
+            }
+            nb.chapterCount = ChapterStats.realChapterCount(list)
+            ChapterStats.lastRealChapter(list)?.title?.takeIf { it.isNotBlank() }?.let { nb.lastChapter = it }
+            loadingToc = false
+            resumeTarget = null
+            val target = list.firstOrNull { it.title == anchorTitle && !anchorTitle.isNullOrBlank() }
+                ?: list.getOrNull((ratio * list.size).toInt().coerceIn(0, list.size - 1))
+                ?: list.first()
+            loadChapter(target)
+            withContext(Dispatchers.IO) {
+                runCatching { ShelfRepository.refreshMeta(context, nb, src.bookSourceUrl) }
+            }
+            withContext(Dispatchers.Main) { refreshShelf() }
+        }
+    }
     val openBookNow = currentBook
     val openChapter = currentChapter
 
@@ -457,6 +507,8 @@ private fun NovelApp() {
             // 第17批：全文搜索整页用书源规则补拉未缓存章节，拉到的正文回灌共享缓存。
             book = currentBook,
             onCacheLoaded = { url, body -> contentCache[url] = body },
+            // 第 26 批：阅读页换源入口回调
+            onSwitchSource = switchSource,
             initialPage = if (resumeTarget?.first == openChapter.url) (resumeTarget?.second ?: 0) else 0,
             onPageChanged = { page ->
                 val b = currentBook
@@ -821,9 +873,10 @@ private fun SearchScreen(
                         // 第 24 批：key 必须唯一。旧 key 由 originName|bookUrl|name 拼成，
                         // 不同书源返回同名同链接的书时会产生重复 key，LazyColumn 直接抛
                         // IllegalArgumentException 闪退（Compose 渲染期异常，runCatching 够不着）。
+                        // 第 26 批：聚合后同名多源已合成一条，key 直接用 bookUrl（稳定且唯一）。
                         itemsIndexed(
                             items = hits,
-                            key = { index, book -> "sr-" + index + "-" + book.bookUrl },
+                            key = { _, book -> "sr-" + book.bookUrl },
                         ) { _, book ->
                             BookCard(book) { onOpen(book) }
                         }

@@ -35,6 +35,14 @@ class Book(
     /** 命中该书源；搜索阶段回填，供详情/目录/正文复用同一条书源的规则与请求头。 */
     var source: BookSource? = null
 
+    /**
+     * 第 26 批：同书（同名 + 同作者）在其他书源上的副本。
+     *
+     * 搜索页面按「书名 + 作者」聚合后，本对象代表其中一条（排序最靠前的那个源），
+     * 其余源按原顺序挂在这张表里，供阅读页「换源」弹窗列出并切换。
+     */
+    var altSources: List<Book> = emptyList()
+
     override val variableMap = HashMap<String, String>()
 
     private val bigVariableMap = HashMap<String, String>()

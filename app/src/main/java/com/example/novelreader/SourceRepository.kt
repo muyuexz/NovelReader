@@ -116,7 +116,8 @@ object SourceRepository {
                                 acc += hits
                                 rankByRelevance(acc, key)
                             // 第 24 批：按 bookUrl 去重，避免多源同一本书造成列表重复。
-                            }.distinctBy { it.bookUrl }
+                            // 第 26 批：再按「书名 + 作者」聚合，同名书合并成一条（其余源进 altSources）。
+                            }.distinctBy { it.bookUrl }.let { aggregate(it) }
                             onBatch(snapshot)
                         }
                         }
@@ -126,6 +127,37 @@ object SourceRepository {
             jobs.awaitAll()
             synchronized(lock) { acc.size }
         }
+    }
+
+    /**
+     * 第 26 批：书名 + 作者聚合。
+     *
+     * 同一本书会在多个书源里各搜到一条，书源不同则 [Book.bookUrl] 不同，
+     * 上一批的 `distinctBy { bookUrl }` 拦不住，列表里就出现「一条书重复 N 遍」。
+     * 这里把「同名 + 同作者」的结果收成一条：第一条（排序最靠前、通常最可信）
+     * 作为代表，其余收进它的 [Book.altSources]，供阅读页换源。
+     *
+     * 归一键沿用 [normalize]（全角转半角、去空白与标点、统一小写），
+     * 所以《斗破苍穹》与「斗破 苍穹！」不会被拆成两条。
+     * 书名为空容不下聚合，直接各自成条，避免把不相关的书搅一起。
+     */
+    private fun aggregate(list: List<Book>): List<Book> {
+        // 每次快照都是全量重排，先清空历史挂载，避免上一轮的兄弟源残留。
+        list.forEach { it.altSources = emptyList() }
+        val out = ArrayList<Book>()
+        val index = HashMap<String, Book>()
+        for (b in list) {
+            val n = normalize(b.name)
+            val key = n + "\u0001" + normalize(b.author)
+            val first = if (n.isEmpty()) null else index[key]
+            if (first == null) {
+                if (n.isNotEmpty()) index[key] = b
+                out += b
+            } else {
+                first.altSources = first.altSources + b
+            }
+        }
+        return out
     }
 
     /**

@@ -263,9 +263,18 @@ fun BookCard(book: Book, onClick: () -> Unit) {
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                if (!book.originName.isNullOrBlank()) {
+                if (!book.originName.isNullOrBlank() || book.altSources.isNotEmpty()) {
                     Spacer(Modifier.height(7.dp))
-                    TagPill(book.originName)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (!book.originName.isNullOrBlank()) {
+                            TagPill(book.originName)
+                        }
+                        if (book.altSources.isNotEmpty()) {
+                            if (!book.originName.isNullOrBlank()) Spacer(Modifier.width(6.dp))
+                            // 第 26 批：聚合后告诉用户「这条背后还有几个源」，进阅读页可换。
+                            TagPill("${book.altSources.size + 1} 个书源 · 可换源")
+                        }
+                    }
                 }
             }
             Spacer(Modifier.width(8.dp))

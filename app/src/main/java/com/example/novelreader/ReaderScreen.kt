@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
@@ -70,6 +71,7 @@ import com.example.novelreader.analyzeRule.Book
 import com.example.novelreader.analyzeRule.BookChapter
 import com.example.novelreader.analyzeRule.BookSourceEngine
 import com.example.novelreader.ui.ReaderPalette
+import com.example.novelreader.ui.TagPill
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -110,6 +112,8 @@ fun ReaderScreen(
     book: Book? = null,
     // 第17批：搜索时补拉到的新正文回灌上层缓存，之后阅读页打开即秒开。
     onCacheLoaded: (String, String) -> Unit = { _, _ -> },
+    // 第 26 批：换源——把当前书切到另一个书源继续读（上层重拉目录并定位同章）。
+    onSwitchSource: (Book) -> Unit = {},
 ) {
     val context = LocalContext.current
     val prefs = remember {
@@ -128,6 +132,8 @@ fun ReaderScreen(
     // 第 7 批：顶栏两个新入口的状态
     var showCacheDialog by remember { mutableStateOf(false) }
     var showSearch by remember { mutableStateOf(false) }
+    // 第 26 批：换源弹窗开关（列同书同作者的各个书源记录）
+    var showSwitchSource by remember { mutableStateOf(false) }
     var cacheFrom by remember { mutableStateOf("") }
     var cacheTo by remember { mutableStateOf("") }
     // 第9批：打开离线缓存弹窗时，默认把范围填成「第一章 ~ 最后一章」。
@@ -278,6 +284,10 @@ fun ReaderScreen(
                     }
                     TextButton(onClick = { showSearch = true }) {
                         Text("搜索", color = palette.fg, fontSize = 13.sp)
+                    }
+                    // 第 26 批：换源入口——弹窗列出同书同作者的各书源记录，选中即切源续读
+                    TextButton(onClick = { showSwitchSource = true }) {
+                        Text("换源", color = palette.fg, fontSize = 13.sp)
                     }
                 }
             }
@@ -609,6 +619,104 @@ fun ReaderScreen(
             }
         }
 
+        // ============================================================
+        // 第 26 批：换源弹窗
+        // 与离线缓存弹窗同构（同款遮罩 + 圆角面板）。列表首条是当前源，
+        // 其余来自搜索聚合时挂上的 book.altSources，每条给出「源名 + 状态/最新章节」。
+        // ============================================================
+        if (showSwitchSource) {
+            val base = book
+            val options: List<Book> = if (base == null) emptyList() else listOf(base) + base.altSources
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .zIndex(2f)
+                    .background(Color.Black.copy(alpha = 0.45f))
+                    .clickable { showSwitchSource = false },
+            ) {
+                Surface(
+                    color = palette.panel,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(24.dp)
+                        .fillMaxWidth(),
+                ) {
+                    Column(Modifier.padding(18.dp)) {
+                        Text("切换书源", color = palette.fg, fontSize = 16.sp)
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = (base?.name ?: "").ifBlank { "当前书籍" } +
+                                (base?.author?.takeIf { it.isNotBlank() }?.let { " · " + it } ?: ""),
+                            color = palette.sub,
+                            fontSize = 12.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        if (options.size <= 1) {
+                            Text(
+                                text = "这本书暂时只有 1 个书源记录。可到「发现」页搜索同名书，" +
+                                    "命中多个书源后再进来切换。",
+                                color = palette.sub,
+                                fontSize = 12.sp,
+                            )
+                        } else {
+                            LazyColumn(Modifier.heightIn(max = 320.dp)) {
+                                itemsIndexed(
+                                    items = options,
+                                    key = { i, b -> "ss-" + i + "-" + b.bookUrl + "@" + b.originName },
+                                ) { i, opt ->
+                                    val cur = i == 0
+                                    Column(
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                showSwitchSource = false
+                                                if (!cur) onSwitchSource(opt)
+                                            }
+                                            .padding(vertical = 10.dp),
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = opt.originName.ifBlank {
+                                                    opt.origin.ifBlank { "未知书源" }
+                                                },
+                                                color = if (cur) palette.sub else palette.fg,
+                                                fontSize = 14.sp,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.weight(1f),
+                                            )
+                                            if (cur) TagPill("当前", color = palette.sub)
+                                        }
+                                        Spacer(Modifier.height(3.dp))
+                                        Text(
+                                            text = listOfNotNull(
+                                                opt.status?.takeIf { it.isNotBlank() },
+                                                opt.lastChapter?.takeIf { it.isNotBlank() }
+                                                    ?.let { "最新 " + it },
+                                            ).joinToString(" · ").ifBlank { "—" },
+                                            color = palette.sub,
+                                            fontSize = 12.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Row(Modifier.fillMaxWidth()) {
+                            Spacer(Modifier.weight(1f))
+                            TextButton(onClick = { showSwitchSource = false }) {
+                                Text("取消", color = palette.sub)
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // ============================================================
         // 第20批：搜索结果导航模式。
         // 跳转定位后：正文中间两侧是「上一条 / 下一条结果」，
