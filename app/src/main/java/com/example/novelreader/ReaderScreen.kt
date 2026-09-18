@@ -48,7 +48,11 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -82,6 +86,8 @@ fun ReaderScreen(
     onOpenToc: () -> Unit,
     onCacheRange: (Int, Int) -> Unit = { _, _ -> },
     cache: Map<String, String> = emptyMap(),
+    // 第16批：缓存写入本身不触发重组，靠这个自增计数驱动「全文搜索」结果刷新。
+    cacheTick: Int = 0,
     initialPage: Int = 0,
     onPageChanged: (Int) -> Unit = {},
 ) {
@@ -112,6 +118,10 @@ fun ReaderScreen(
         }
     }
     var searchKeyword by remember { mutableStateOf("") }
+    // 第16批：正文搜索的「跳转 + 高亮」意图。
+    // seekChapter = 待跳转的章 url（跳完即清空）；highlight = 当前要在正文里标黄的关键字。
+    var seekChapter by remember { mutableStateOf("") }
+    var highlight by remember { mutableStateOf("") }
     val palette = ReaderPalettes.firstOrNull { it.id == paletteId } ?: ReaderPalettes.first()
 
     val density = LocalDensity.current
@@ -145,13 +155,39 @@ fun ReaderScreen(
     LaunchedEffect(chapter.url, pagesChapter) {
         if (pagesChapter == chapter.url && pageItems.size > 1) {
             val endPage = (pageItems.size - 2).coerceAtLeast(1)
+            // 第16批：正文搜索点进来的章，优先落到关键字所在那一页。
+            // pageItems[0] 是「上一章」占位页，所以命中的下标天然就是 1 基页号。
+            val seekIdx = if (seekChapter == chapter.url && highlight.isNotBlank()) {
+                pageItems.indexOfFirst { it.contains(highlight, ignoreCase = true) }
+            } else {
+                -1
+            }
             // 第13批：续读时回到上次退出那一页（initialPage 为 1 基页号，0 视作第 1 页）。
-            val target = if (enterEndChapter == chapter.url) endPage else initialPage.coerceIn(1, endPage)
+            val target = when {
+                seekIdx in 1..endPage -> seekIdx
+                enterEndChapter == chapter.url -> endPage
+                else -> initialPage.coerceIn(1, endPage)
+            }
             runCatching { pagerState.scrollToPage(target) }
             // 第9批：末尾进入的意图只消费一次，不影响后续换章。
             enterEndChapter = null
+            // 第16批：跳转意图同样一次性消费，避免后续换章又被拽回旧页。
+            if (seekIdx in 1..endPage) seekChapter = ""
             // 第8批：确认已回到本正文页，才解除换章锁
             navLock = false
+        }
+    }
+
+    // 第16批：点的是「当前章」里的搜索结果时不会换章，上面那个 effect 不会被触发，
+    // 这里单独兜一次——直接跳到本页命中的页号。
+    LaunchedEffect(seekChapter, pagesChapter, pageItems.size) {
+        if (seekChapter.isNotBlank() && seekChapter == chapter.url &&
+            pagesChapter == chapter.url && pageItems.size > 2
+        ) {
+            val endPage = (pageItems.size - 2).coerceAtLeast(1)
+            val p = pageItems.indexOfFirst { it.contains(highlight, ignoreCase = true) }
+            if (p in 1..endPage) runCatching { pagerState.scrollToPage(p) }
+            seekChapter = ""
         }
     }
 
@@ -317,7 +353,8 @@ fun ReaderScreen(
                                             .padding(horizontal = 22.dp, vertical = 16.dp),
                                     ) {
                                         Text(
-                                            text = item,
+                                            // 第16批：正文里把搜索结果的关键字标黄，跳过来一眼就能看到。
+                                            text = highlightText(item, highlight),
                                             color = palette.fg,
                                             fontSize = fontSize.sp,
                                             lineHeight = lineHeight.sp,
@@ -538,10 +575,32 @@ fun ReaderScreen(
         // 第 7 批第 7 条：全文搜索弹窗（只搜已缓存正文，参照 Legado）
         // ============================================================
         if (showSearch) {
-            val hits = if (searchKeyword.isBlank()) {
-                emptyList<BookChapter>()
-            } else {
-                chapters.filter { c -> cache[c.url]?.contains(searchKeyword) == true }
+            // 第16批：不再是「命中/不命中」的按章粗筛。
+            // 逐章统计关键字在已缓存全文里的真实出现次数，匹配统一 ignoreCase，
+            // 结果按出现次数从多到少排序；当前章正文以 content 为准，避免刚加载完
+            // 还没写进 contentCache 时被漏掉（这正是「结果对不上」的来源之一）。
+            val kw = searchKeyword.trim()
+            val hits = remember(kw, cacheTick, content) {
+                if (kw.isEmpty()) {
+                    emptyList<SearchHit>()
+                } else {
+                    chapters.mapNotNull { c ->
+                        val body = if (c.url == chapter.url && content.isNotBlank()) {
+                            content
+                        } else {
+                            cache[c.url].orEmpty()
+                        }
+                        if (body.isEmpty()) return@mapNotNull null
+                        var n = 0
+                        var i = body.indexOf(kw, 0, ignoreCase = true)
+                        val first = i
+                        while (i >= 0) {
+                            n++
+                            i = body.indexOf(kw, i + kw.length, ignoreCase = true)
+                        }
+                        if (n == 0) null else SearchHit(c, n, first)
+                    }.sortedByDescending { it.count }
+                }
             }
             Box(
                 Modifier
@@ -573,17 +632,27 @@ fun ReaderScreen(
                         )
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            text = "命中 " + hits.size + " 章（仅已缓存章节）",
+                            text = if (searchKeyword.isBlank()) {
+                                "输入关键字后开始搜索（仅已缓存章节）"
+                            } else {
+                                "全文命中 " + hits.sumOf { it.count } + " 次，分布在 " + hits.size +
+                                    " 章（仅已缓存章节）"
+                            },
                             color = palette.sub,
                             fontSize = 12.sp,
                         )
                         Spacer(Modifier.height(6.dp))
                         LazyColumn(Modifier.fillMaxWidth().height(260.dp)) {
-                            items(hits) { c ->
-                                val body = cache[c.url].orEmpty()
-                                val at = body.indexOf(searchKeyword)
-                                val snippet = if (at >= 0) {
-                                    body.substring((at - 12).coerceAtLeast(0), (at + 40).coerceAtMost(body.length))
+                            items(hits, key = { it.chapter.url }) { h ->
+                                val c = h.chapter
+                                val body = if (c.url == chapter.url && content.isNotBlank()) {
+                                    content
+                                } else {
+                                    cache[c.url].orEmpty()
+                                }
+                                val at = h.firstAt
+                                val snippet = if (at in 0 until body.length) {
+                                    body.substring((at - 14).coerceAtLeast(0), (at + 46).coerceAtMost(body.length))
                                 } else {
                                     ""
                                 }
@@ -591,18 +660,32 @@ fun ReaderScreen(
                                     Modifier
                                         .fillMaxWidth()
                                         .clickable {
+                                            // 第16批：把「跳哪一章 + 高亮什么词」交给阅读页消费。
+                                            highlight = searchKeyword.trim()
+                                            seekChapter = c.url
                                             showSearch = false
                                             onOpenChapter(c)
                                         }
                                         .padding(vertical = 8.dp),
                                 ) {
-                                    Text(
-                                        text = "第 " + (chapters.indexOf(c) + 1) + " 章 " + c.title,
-                                        color = palette.fg,
-                                        fontSize = 14.sp,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
+                                    Row(
+                                        Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            text = "第 " + (chapters.indexOf(c) + 1) + " 章 " + c.title,
+                                            color = palette.fg,
+                                            fontSize = 14.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                        Text(
+                                            text = h.count.toString() + " 次",
+                                            color = palette.sub,
+                                            fontSize = 12.sp,
+                                        )
+                                    }
                                     if (snippet.isNotBlank()) {
                                         Text(snippet, color = palette.sub, fontSize = 12.sp, maxLines = 2)
                                     }
@@ -614,6 +697,39 @@ fun ReaderScreen(
             }
         }
 }
+}
+
+/* ------------------------------------------------------------------ *
+ *  第16批：正文搜索命中项
+ *  count   = 关键字在本章已缓存全文里的出现总次数
+ *  firstAt = 首次出现的下标（用来截取结果里的上下文片段；-1 表示没找到）
+ * ------------------------------------------------------------------ */
+private data class SearchHit(
+    val chapter: BookChapter,
+    val count: Int,
+    val firstAt: Int,
+)
+
+/* ------------------------------------------------------------------ *
+ *  第16批：把一页正文里所有出现的关键字标上底色，
+ *  让「搜索结果跳转」之后能立刻看到词在哪。
+ * ------------------------------------------------------------------ */
+private fun highlightText(text: String, keyword: String): AnnotatedString {
+    val kw = keyword.trim()
+    if (kw.isEmpty() || text.isEmpty()) return AnnotatedString(text)
+    return buildAnnotatedString {
+        var i = 0
+        var start = text.indexOf(kw, 0, ignoreCase = true)
+        while (start >= 0) {
+            append(text.substring(i, start))
+            withStyle(SpanStyle(background = Color(0xFFFFEB3B).copy(alpha = 0.55f))) {
+                append(text.substring(start, start + kw.length))
+            }
+            i = start + kw.length
+            start = text.indexOf(kw, i, ignoreCase = true)
+        }
+        append(text.substring(i))
+    }
 }
 
 /* ------------------------------------------------------------------ *

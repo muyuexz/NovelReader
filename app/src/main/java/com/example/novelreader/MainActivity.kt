@@ -442,6 +442,7 @@ private fun NovelApp() {
             onOpenToc = { showReaderToc = true },
             onCacheRange = cacheRange,
             cache = contentCache,
+            cacheTick = cacheTick,
             initialPage = if (resumeTarget?.first == openChapter.url) (resumeTarget?.second ?: 0) else 0,
             onPageChanged = { page ->
                 val b = currentBook
