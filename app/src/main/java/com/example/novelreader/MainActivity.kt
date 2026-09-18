@@ -443,6 +443,9 @@ private fun NovelApp() {
             onCacheRange = cacheRange,
             cache = contentCache,
             cacheTick = cacheTick,
+            // 第17批：全文搜索整页用书源规则补拉未缓存章节，拉到的正文回灌共享缓存。
+            book = currentBook,
+            onCacheLoaded = { url, body -> contentCache[url] = body },
             initialPage = if (resumeTarget?.first == openChapter.url) (resumeTarget?.second ?: 0) else 0,
             onPageChanged = { page ->
                 val b = currentBook

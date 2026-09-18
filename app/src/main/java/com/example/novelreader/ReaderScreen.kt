@@ -62,8 +62,18 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import com.example.novelreader.analyzeRule.Book
 import com.example.novelreader.analyzeRule.BookChapter
+import com.example.novelreader.analyzeRule.BookSourceEngine
 import com.example.novelreader.ui.ReaderPalette
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 import com.example.novelreader.ui.ReaderPalettes
 import com.example.novelreader.ui.Stepper
 
@@ -90,6 +100,10 @@ fun ReaderScreen(
     cacheTick: Int = 0,
     initialPage: Int = 0,
     onPageChanged: (Int) -> Unit = {},
+    // 第17批：全文搜索整页化后，搜索页要用书源规则补拉未缓存章节的正文。
+    book: Book? = null,
+    // 第17批：搜索时补拉到的新正文回灌上层缓存，之后阅读页打开即秒开。
+    onCacheLoaded: (String, String) -> Unit = { _, _ -> },
 ) {
     val context = LocalContext.current
     val prefs = remember {
@@ -354,7 +368,7 @@ fun ReaderScreen(
                                     ) {
                                         Text(
                                             // 第16批：正文里把搜索结果的关键字标黄，跳过来一眼就能看到。
-                                            text = highlightText(item, highlight),
+                                            text = remember(item, highlight) { highlightText(item, highlight) },
                                             color = palette.fg,
                                             fontSize = fontSize.sp,
                                             lineHeight = lineHeight.sp,
@@ -572,129 +586,28 @@ fun ReaderScreen(
         }
 
         // ============================================================
-        // 第 7 批第 7 条：全文搜索弹窗（只搜已缓存正文，参照 Legado）
+        // 第17批：正文搜索整页化——弹窗下架，改成整页覆盖式搜索页。
+        // 只扫缓存的时代结束：未缓存章节由搜索页用书源规则联网补拉，
+        // 命中范围对齐 Legado 的「全书检索」。
         // ============================================================
         if (showSearch) {
-            // 第16批：不再是「命中/不命中」的按章粗筛。
-            // 逐章统计关键字在已缓存全文里的真实出现次数，匹配统一 ignoreCase，
-            // 结果按出现次数从多到少排序；当前章正文以 content 为准，避免刚加载完
-            // 还没写进 contentCache 时被漏掉（这正是「结果对不上」的来源之一）。
-            val kw = searchKeyword.trim()
-            val hits = remember(kw, cacheTick, content) {
-                if (kw.isEmpty()) {
-                    emptyList<SearchHit>()
-                } else {
-                    chapters.mapNotNull { c ->
-                        val body = if (c.url == chapter.url && content.isNotBlank()) {
-                            content
-                        } else {
-                            cache[c.url].orEmpty()
-                        }
-                        if (body.isEmpty()) return@mapNotNull null
-                        var n = 0
-                        var i = body.indexOf(kw, 0, ignoreCase = true)
-                        val first = i
-                        while (i >= 0) {
-                            n++
-                            i = body.indexOf(kw, i + kw.length, ignoreCase = true)
-                        }
-                        if (n == 0) null else SearchHit(c, n, first)
-                    }.sortedByDescending { it.count }
-                }
-            }
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .zIndex(2f)
-                    .background(Color.Black.copy(alpha = 0.45f)),
-            ) {
-                Surface(
-                    color = palette.panel,
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .padding(24.dp)
-                        .fillMaxWidth(),
-                ) {
-                    Column(Modifier.padding(18.dp)) {
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text("正文搜索", color = palette.fg, fontSize = 16.sp, modifier = Modifier.weight(1f))
-                            TextButton(onClick = { showSearch = false }) {
-                                Text("关闭", color = palette.sub)
-                            }
-                        }
-                        OutlinedTextField(
-                            value = searchKeyword,
-                            onValueChange = { searchKeyword = it },
-                            label = { Text("关键字", fontSize = 12.sp) },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = if (searchKeyword.isBlank()) {
-                                "输入关键字后开始搜索（仅已缓存章节）"
-                            } else {
-                                "全文命中 " + hits.sumOf { it.count } + " 次，分布在 " + hits.size +
-                                    " 章（仅已缓存章节）"
-                            },
-                            color = palette.sub,
-                            fontSize = 12.sp,
-                        )
-                        Spacer(Modifier.height(6.dp))
-                        LazyColumn(Modifier.fillMaxWidth().height(260.dp)) {
-                            items(hits, key = { it.chapter.url }) { h ->
-                                val c = h.chapter
-                                val body = if (c.url == chapter.url && content.isNotBlank()) {
-                                    content
-                                } else {
-                                    cache[c.url].orEmpty()
-                                }
-                                val at = h.firstAt
-                                val snippet = if (at in 0 until body.length) {
-                                    body.substring((at - 14).coerceAtLeast(0), (at + 46).coerceAtMost(body.length))
-                                } else {
-                                    ""
-                                }
-                                Column(
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            // 第16批：把「跳哪一章 + 高亮什么词」交给阅读页消费。
-                                            highlight = searchKeyword.trim()
-                                            seekChapter = c.url
-                                            showSearch = false
-                                            onOpenChapter(c)
-                                        }
-                                        .padding(vertical = 8.dp),
-                                ) {
-                                    Row(
-                                        Modifier.fillMaxWidth(),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Text(
-                                            text = "第 " + (chapters.indexOf(c) + 1) + " 章 " + c.title,
-                                            color = palette.fg,
-                                            fontSize = 14.sp,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.weight(1f),
-                                        )
-                                        Text(
-                                            text = h.count.toString() + " 次",
-                                            color = palette.sub,
-                                            fontSize = 12.sp,
-                                        )
-                                    }
-                                    if (snippet.isNotBlank()) {
-                                        Text(snippet, color = palette.sub, fontSize = 12.sp, maxLines = 2)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            FullTextSearchPage(
+                palette = palette,
+                book = book,
+                chapters = chapters,
+                currentChapterUrl = chapter.url,
+                currentContent = content,
+                cache = cache,
+                onCacheLoaded = onCacheLoaded,
+                onClose = { showSearch = false },
+                onJump = { c, kw ->
+                    // 第16批的「跳哪一章 + 高亮什么词」意图照旧交给阅读页消费。
+                    highlight = kw
+                    seekChapter = c.url
+                    showSearch = false
+                    onOpenChapter(c)
+                },
+            )
         }
 }
 }
@@ -708,6 +621,8 @@ private data class SearchHit(
     val chapter: BookChapter,
     val count: Int,
     val firstAt: Int,
+    /** 第17批：命中处上下文片段，整页搜索结果直接展示，不必回头再查缓存。 */
+    val snippet: String = "",
 )
 
 /* ------------------------------------------------------------------ *
@@ -732,41 +647,6 @@ private fun highlightText(text: String, keyword: String): AnnotatedString {
     }
 }
 
-/* ------------------------------------------------------------------ *
- *  换章占位页：翻到最左/最右会停在这里，停稳即自动换章，点一下也行
- * ------------------------------------------------------------------ */
-@Composable
-private fun JumpPage(
-    label: String,
-    target: BookChapter?,
-    palette: ReaderPalette,
-    onGo: (BookChapter) -> Unit,
-) {
-    Box(
-        Modifier
-            .fillMaxSize()
-            .clickable(enabled = target != null) { target?.let(onGo) },
-        contentAlignment = Alignment.Center,
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                text = if (target == null) "（没有" + label + "了）" else label + " ›",
-                color = palette.sub,
-                fontSize = 15.sp,
-            )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                text = target?.title?.ifBlank { "（无标题）" } ?: "",
-                color = palette.fg,
-                fontSize = 17.sp,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(horizontal = 40.dp),
-            )
-        }
-    }
-}
 
 /* ------------------------------------------------------------------ *
  *  分页核心：把一整章正文按「阅读区实际宽高 + 当前字号行距」切成页
@@ -826,4 +706,258 @@ private fun paginate(
     }
     if (pages.isEmpty()) pages.add(body)
     return pages
+}
+
+/* ------------------------------------------------------------------ *
+ *  第17批：单章关键字计数（全书搜索的判定核心）
+ *  count   = 关键字在本章正文里的出现总次数
+ *  firstAt = 首次出现下标（-1 表示没命中，调用方会过滤）
+ *  snippet = 命中处上下文片段，整页搜索结果直接展示
+ * ------------------------------------------------------------------ */
+private fun countHits(key: String, c: BookChapter, body: String): SearchHit? {
+    if (key.isEmpty() || body.isEmpty()) return null
+    var n = 0
+    var i = body.indexOf(key, 0, ignoreCase = true)
+    val first = i
+    while (i >= 0) {
+        n++
+        i = body.indexOf(key, i + key.length, ignoreCase = true)
+    }
+    if (n == 0) return null
+    val at = first.coerceAtLeast(0)
+    val snippet = body.substring(
+        (at - 14).coerceAtLeast(0),
+        (at + 46).coerceAtMost(body.length),
+    )
+    return SearchHit(c, n, at, snippet)
+}
+
+/* ------------------------------------------------------------------ *
+ *  第17批：全文搜索整页
+ *
+ *  - 形态：整页覆盖层（第16批的弹窗下架），阅读页状态不销毁，返回无缝。
+ *  - 范围：全书。已缓存章节直读缓存；未缓存章节用书源规则联网补拉，
+ *          拉到的正文回灌上层缓存，之后阅读页打开即秒开。
+ *  - 性能：搜索跑在后台协程 + 并发限流（4 路），输入 350ms 防抖，
+ *          章节进度与结果节流回写，绝不堵主线程。
+ * ------------------------------------------------------------------ */
+@Composable
+private fun FullTextSearchPage(
+    palette: ReaderPalette,
+    book: Book?,
+    chapters: List<BookChapter>,
+    currentChapterUrl: String,
+    currentContent: String,
+    cache: Map<String, String>,
+    onCacheLoaded: (String, String) -> Unit,
+    onClose: () -> Unit,
+    onJump: (BookChapter, String) -> Unit,
+) {
+    var kw by remember { mutableStateOf("") }
+    var scanning by remember { mutableStateOf(false) }
+    var scanned by remember { mutableStateOf(0) }
+    var totalCount by remember { mutableStateOf(0) }
+    var hits by remember { mutableStateOf(emptyList<SearchHit>()) }
+
+    val source = book?.source
+
+    // 关键字一变，上一个搜索协程随 LaunchedEffect 自动取消；
+    // 停手 350ms 才真正开搜，避免边打字边全书扫描。
+    LaunchedEffect(kw, chapters.size, source) {
+        val key = kw.trim()
+        if (key.isEmpty()) {
+            scanning = false
+            scanned = 0
+            totalCount = 0
+            hits = emptyList()
+            return@LaunchedEffect
+        }
+        delay(350)
+        scanning = true
+        scanned = 0
+        totalCount = 0
+        hits = emptyList()
+
+        val list = chapters
+        val total = list.size
+        if (total == 0) {
+            scanning = false
+            return@LaunchedEffect
+        }
+        val found = ArrayList<SearchHit>()
+        val sem = Semaphore(4)
+        var localDone = 0
+        var lastShown = 0
+
+        coroutineScope {
+            list.map { c ->
+                async(Dispatchers.IO) {
+                    sem.withPermit {
+                        val cached = cache[c.url]
+                        val body = when {
+                            c.url == currentChapterUrl && currentContent.isNotBlank() -> currentContent
+                            !cached.isNullOrEmpty() -> cached
+                            source != null -> runCatching {
+                                BookSourceEngine.getContent(source, book!!, c)
+                            }.getOrDefault("")
+                            else -> ""
+                        }
+                        // 补拉到的正文回灌缓存（不覆盖已有内容）。
+                        if (body.isNotEmpty() && c.url != currentChapterUrl && cached.isNullOrEmpty()) {
+                            onCacheLoaded(c.url, body)
+                        }
+                        val hit = countHits(key, c, body)
+                        if (hit != null) {
+                            synchronized(found) { found.add(hit) }
+                        }
+                        localDone++
+                        // 节流：每 16 章才回写一次进度/结果，避免上千次重组。
+                        if (localDone - lastShown >= 16 || localDone == total) {
+                            lastShown = localDone
+                            val snap = synchronized(found) { found.sortedByDescending { it.count } }
+                            val d = localDone
+                            withContext(Dispatchers.Main) {
+                                scanned = d
+                                hits = snap
+                                totalCount = snap.sumOf { it.count }
+                            }
+                        }
+                    }
+                }
+            }.awaitAll()
+        }
+        scanning = false
+        val snap = synchronized(found) { found.sortedByDescending { it.count } }
+        hits = snap
+        totalCount = snap.sumOf { it.count }
+        scanned = total
+    }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .zIndex(3f)
+            .background(palette.bg),
+    ) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .windowInsetsPadding(WindowInsets.systemBars),
+        ) {
+            // —— 顶栏 ——
+            Surface(color = palette.panel) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(onClick = onClose) {
+                        Text("‹ 返回", color = palette.fg, fontSize = 14.sp)
+                    }
+                    Text(
+                        text = "全文搜索",
+                        color = palette.fg,
+                        fontSize = 15.sp,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (scanning) {
+                        Text(
+                            text = scanned.toString() + "/" + chapters.size,
+                            color = palette.sub,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(end = 10.dp),
+                        )
+                    }
+                }
+            }
+
+            Column(Modifier.padding(horizontal = 14.dp)) {
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = kw,
+                    onValueChange = { kw = it },
+                    label = { Text("关键字", fontSize = 12.sp) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = when {
+                        kw.isBlank() -> "输入关键字，全书范围检索（已缓存直读，其余联网补拉）"
+                        scanning -> "正在扫描 " + scanned + "/" + chapters.size +
+                            " 章，已命中 " + totalCount + " 次"
+                        else -> "全书命中 " + totalCount + " 次，分布在 " + hits.size + " 章"
+                    },
+                    color = palette.sub,
+                    fontSize = 12.sp,
+                )
+                Spacer(Modifier.height(4.dp))
+            }
+
+            if (hits.isEmpty()) {
+                Box(
+                    Modifier.fillMaxWidth().weight(1f),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = when {
+                            scanning -> "扫描中…"
+                            kw.isBlank() -> "全书搜索"
+                            else -> "没有命中"
+                        },
+                        color = palette.sub,
+                        fontSize = 13.sp,
+                    )
+                }
+            } else {
+                LazyColumn(
+                    Modifier.fillMaxWidth().weight(1f).padding(horizontal = 14.dp),
+                ) {
+                    items(hits, key = { it.chapter.url }) { h ->
+                        val c = h.chapter
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { onJump(c, kw.trim()) }
+                                .padding(vertical = 10.dp),
+                        ) {
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = "第 " + (chapters.indexOf(c) + 1) + " 章 " + c.title,
+                                    color = palette.fg,
+                                    fontSize = 14.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Text(
+                                    text = h.count.toString() + " 次",
+                                    color = palette.sub,
+                                    fontSize = 12.sp,
+                                )
+                            }
+                            if (h.snippet.isNotBlank()) {
+                                Spacer(Modifier.height(2.dp))
+                                Text(
+                                    text = h.snippet,
+                                    color = palette.sub,
+                                    fontSize = 12.sp,
+                                    maxLines = 2,
+                                )
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            Box(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .height(1.dp)
+                                    .background(palette.divider),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
