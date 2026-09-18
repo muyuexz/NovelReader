@@ -61,6 +61,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -258,7 +259,14 @@ fun ReaderScreen(
 
     val totalPages = (pageItems.size - 2).coerceAtLeast(1)
     val curPage = pagerState.currentPage.coerceIn(0, totalPages)
-    val percent = (((curPage - 1).coerceAtLeast(0)) * 100 / totalPages).coerceIn(0, 100)
+    // 第 30 批：顶栏「当前章已阅读百分比」已下线，改到页脚右下角显示
+    // 「当前页数 + 全书阅读百分比」。全书进度 = (当前章下标 + 章内页占比) / 总章数。
+    val chapterProgress = curPage.coerceIn(0, totalPages).toFloat() / totalPages.toFloat()
+    val bookPercent = if (idx >= 0 && chapters.isNotEmpty()) {
+        (((idx + chapterProgress) / chapters.size) * 100f).coerceIn(0f, 100f).toInt()
+    } else {
+        0
+    }
 
     // 第13批：把「当前页」上报给上层落盘，续读才能精确回到退出时那一页。
     // 只在正文页（跳过首尾占位页）且本页归属当前章时上报，避免过渡页污染进度。
@@ -293,12 +301,6 @@ fun ReaderScreen(
                         color = palette.fg,
                         fontSize = 14.sp,
                     )
-                    Text(
-                        text = if (loading) "--" else "$percent%",
-                        color = palette.sub,
-                        fontSize = 12.sp,
-                        modifier = Modifier.padding(end = 2.dp),
-                    )
                     // 第 7 批第 5/7 条：顶栏补两个入口——离线缓存、全文搜索
                     TextButton(onClick = { showCacheDialog = true }) {
                         Text("缓存", color = palette.fg, fontSize = 13.sp)
@@ -324,7 +326,15 @@ fun ReaderScreen(
                 BoxWithConstraints(Modifier.fillMaxSize()) {
                     val availW = with(density) { (maxWidth - 44.dp).toPx() }
                     val availH = with(density) { (maxHeight - 32.dp).toPx() }
-                    val body = indentParagraphs(content.ifBlank { "（正文为空）" })
+                    // 第 30 批：每章第一页开头标出当前目录章节（顶格、与正文空一行）。
+                    val chapterLabel = if (chapter.title.isNotBlank()) {
+                        if (idx >= 0) "第 " + (idx + 1) + " 章 " + chapter.title else chapter.title
+                    } else {
+                        ""
+                    }
+                    val body = indentParagraphs(content.ifBlank { "（正文为空）" }).let { t ->
+                        if (chapterLabel.isBlank()) t else chapterLabel + "\n\n" + t
+                    }
                     val contentPages = remember(body, availW, availH, textStyle) {
                         paginate(measurer, body, textStyle, availW, availH)
                     }
@@ -423,7 +433,20 @@ fun ReaderScreen(
                                     ) {
                                         Text(
                                             // 第16批：正文里把搜索结果的关键字标黄，跳过来一眼就能看到。
-                                            text = remember(item, highlight) { highlightText(item, highlight) },
+                                            // 第 30 批：每章第一页的章首标题加粗，与正文区分（只加粗、不改字号，
+                                            // 行高仍由 TextStyle.lineHeight 决定，分页结果不变）。
+                                            text = remember(item, highlight, page, chapterLabel) {
+                                                if (page == 1 && chapterLabel.isNotBlank() && item.startsWith(chapterLabel)) {
+                                                    buildAnnotatedString {
+                                                        withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                                                            append(chapterLabel)
+                                                        }
+                                                        append(highlightText(item.removePrefix(chapterLabel), highlight))
+                                                    }
+                                                } else {
+                                                    highlightText(item, highlight)
+                                                }
+                                            },
                                             color = palette.fg,
                                             fontSize = fontSize.sp,
                                             lineHeight = lineHeight.sp,
@@ -570,6 +593,13 @@ fun ReaderScreen(
                         ) {
                             Text("目录", color = palette.fg, fontSize = 14.sp)
                         }
+                        // 第 30 批：设置页脚右下角——当前页数 + 全书已阅读百分比。
+                        Text(
+                            text = "第 " + curPage.coerceAtLeast(1) + "/" + totalPages + " 页 · " + bookPercent + "%",
+                            color = palette.sub,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(end = 10.dp),
+                        )
                     }
                 }
             }
