@@ -1,7 +1,7 @@
 package com.example.novelreader.analyzeRule
 
 /**
- * 目录条目「正文 / 非正文」判定 + 章节统计（第 22 批）。
+ * 目录条目「正文 / 非正文」判定 + 章节统计（第 22→23 批：分卷标题降级）。
  *
  * 背景：书源给出的目录里常混进两类东西——
  * 1. 纯导航项：`返回目录`、`上一章`、`下一章`、`加入书架`……这些根本不是章节；
@@ -38,8 +38,9 @@ object ChapterStats {
     )
 
     private val RE_CHAPTER =
-        Regex("第\\s*([0-9０-９零〇一二三四五六七八九十百千万两]{1,10})\\s*[章节回话卷集篇幕]")
+        Regex("第\\s*([0-9０-９零〇一二三四五六七八九十百千万两]{1,10})\\s*[章节回话]")
     private val RE_LEAD = Regex("^\\s*([0-9０-９]{1,5})\\s*[、.．,，:：章节回话]")
+    private val RE_VOLUME = Regex("[卷集部篇幕]")
 
     /** 是否纯导航项（不该出现在目录里，也不该计入章节数）。 */
     fun isNavTitle(title: String): Boolean {
@@ -60,6 +61,8 @@ object ChapterStats {
     fun isRealChapter(title: String): Boolean {
         val t = title.trim()
         if (t.isEmpty() || isNavTitle(t)) return false
+        // 分卷/部头标题（第X卷/篇/幕，且不含 章/节/回/话）不是正文章节（第23批）。
+        if (RE_VOLUME.containsMatchIn(t) && !RE_CHAPTER.containsMatchIn(t)) return false
         if (chapterNumberOf(t) != null) return true
         return SPECIAL_NAMES.any { t.contains(it) }
     }
