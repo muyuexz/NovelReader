@@ -323,6 +323,6 @@ private fun formatWordCount(raw: String?): String {
         if (w >= 100.0) String.format(java.util.Locale.CHINA, "%.0f万", w)
         else String.format(java.util.Locale.CHINA, "%.1f万", w)
     } else {
-        "$n字"
+        "${n}字"
     }
 }
