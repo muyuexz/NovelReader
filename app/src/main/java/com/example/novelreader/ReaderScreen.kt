@@ -82,6 +82,8 @@ fun ReaderScreen(
     onOpenToc: () -> Unit,
     onCacheRange: (Int, Int) -> Unit = { _, _ -> },
     cache: Map<String, String> = emptyMap(),
+    initialPage: Int = 0,
+    onPageChanged: (Int) -> Unit = {},
 ) {
     val context = LocalContext.current
     val prefs = remember {
@@ -143,7 +145,8 @@ fun ReaderScreen(
     LaunchedEffect(chapter.url, pagesChapter) {
         if (pagesChapter == chapter.url && pageItems.size > 1) {
             val endPage = (pageItems.size - 2).coerceAtLeast(1)
-            val target = if (enterEndChapter == chapter.url) endPage else 1
+            // 第13批：续读时回到上次退出那一页（initialPage 为 1 基页号，0 视作第 1 页）。
+            val target = if (enterEndChapter == chapter.url) endPage else initialPage.coerceIn(1, endPage)
             runCatching { pagerState.scrollToPage(target) }
             // 第9批：末尾进入的意图只消费一次，不影响后续换章。
             enterEndChapter = null
@@ -155,6 +158,14 @@ fun ReaderScreen(
     val totalPages = (pageItems.size - 2).coerceAtLeast(1)
     val curPage = pagerState.currentPage.coerceIn(0, totalPages)
     val percent = (((curPage - 1).coerceAtLeast(0)) * 100 / totalPages).coerceIn(0, 100)
+
+    // 第13批：把「当前页」上报给上层落盘，续读才能精确回到退出时那一页。
+    // 只在正文页（跳过首尾占位页）且本页归属当前章时上报，避免过渡页污染进度。
+    LaunchedEffect(chapter.url, pagesChapter, pagerState.currentPage) {
+        if (pagesChapter == chapter.url && pageItems.size > 2 && pagerState.currentPage >= 1) {
+            onPageChanged(curPage.coerceIn(1, totalPages))
+        }
+    }
 
     Box(
         Modifier

@@ -135,6 +135,13 @@ private fun NovelApp() {
     var showReaderToc by remember { mutableStateOf(false) }
     // 记录最近阅读的章节，返回目录时可高亮
     var lastChapterUrl by remember { mutableStateOf<String?>(null) }
+    // 第13批：续读页意图——(章节 url → 退出时页号)。只在「从书架/详情续读」时设置，
+    // 普通点章会被 loadChapter 清掉；ReaderScreen 按它归位，所以进度能精确到页。
+    var resumeTarget by remember { mutableStateOf<Pair<String, Int>?>(null) }
+    // 第13批：目录正序/倒序开关提升到顶层。原先放在 TocScreen 内部，
+    // 一旦 TocScreen 被重组重建（它在 when 里有两个调用点），remember 状态就丢，
+    // 表现为「点一下闪一下又回到正序」。
+    var tocDesc by remember { mutableStateOf(false) }
 
     // 正文章节缓存（第 6 条）：点进阅读后台预取后续章节，翻页命中即秒开
     val contentCache = remember {
@@ -240,6 +247,9 @@ private fun NovelApp() {
     val loadChapter: (BookChapter) -> Unit = load@{ ch ->
         val b = currentBook ?: return@load
         val src = b.source ?: return@load
+        // 第13批：目标是续读章就带上页号；否则（普通换章）清掉意图，避免从别章回来又跳回旧页。
+        val startPage = if (resumeTarget?.first == ch.url) (resumeTarget?.second ?: 0) else 0
+        if (resumeTarget?.first != ch.url) resumeTarget = null
         currentChapter = ch
         lastChapterUrl = ch.url
         // 命中缓存：直接出正文，翻页零等待；未命中才走网络并显示 loading。
@@ -254,7 +264,7 @@ private fun NovelApp() {
         scope.launch {
             // 进度写入与正文拉取并发：进度是本地 IO，不该拖慢正文首屏（第 8 条）
             launch(Dispatchers.IO) {
-                runCatching { ShelfRepository.updateProgress(context, b.bookUrl, src.bookSourceUrl, ch) }
+                runCatching { ShelfRepository.updateProgress(context, b.bookUrl, src.bookSourceUrl, ch, startPage) }
                 // 第11批：进度落盘后必须回灌 UI 状态，否则 shelfEntries 仍是启动时的旧快照，
                 // 返回书架/详情时 continueChapter 读旧值 → 续读回到第一章、书架显示「尚未开始阅读」。
                 withContext(Dispatchers.Main) { refreshShelf() }
@@ -415,6 +425,8 @@ private fun NovelApp() {
                 val target = list.firstOrNull { it.url == entry.lastReadChapterUrl }
                     ?: entry.lastReadChapterIndex.takeIf { it in list.indices }?.let { list[it] }
                     ?: list.first()
+                // 第13批：把落盘的页号带进续读章，ReaderScreen 归位到退出那一页。
+                resumeTarget = target.url to entry.lastReadPage
                 loadChapter(target)
             }
         }
@@ -430,6 +442,16 @@ private fun NovelApp() {
             onOpenToc = { showReaderToc = true },
             onCacheRange = cacheRange,
             cache = contentCache,
+            initialPage = if (resumeTarget?.first == openChapter.url) (resumeTarget?.second ?: 0) else 0,
+            onPageChanged = { page ->
+                val b = currentBook
+                val src = b?.source
+                if (b != null && src != null && page > 0) {
+                    scope.launch(Dispatchers.IO) {
+                        runCatching { ShelfRepository.updateProgress(context, b.bookUrl, src.bookSourceUrl, openChapter, page) }
+                    }
+                }
+            },
         )
 
         // 阅读页点「目录」：目录叠在阅读之上，选中章节后回到阅读
@@ -442,8 +464,11 @@ private fun NovelApp() {
             onBack = { showReaderToc = false },
             onOpen = { ch ->
                 showReaderToc = false
+                resumeTarget = null
                 loadChapter(ch)
             },
+            desc = tocDesc,
+            onToggleDesc = { tocDesc = !tocDesc },
             cachedUrls = remember(cacheTick) { contentCache.keys.toSet() },
         )
 
@@ -459,6 +484,12 @@ private fun NovelApp() {
                     // 第 7 批第 2 条：不再清掉 showDetail，阅读页返回时才能回详情页而非目录页。
                     val target = continueChapter
                     if (target != null) {
+                        // 第13批：续读章带上落盘页号；换新书或点第一章时归零。
+                        resumeTarget = if (target.url == shelfEntryNow?.lastReadChapterUrl) {
+                            target.url to (shelfEntryNow?.lastReadPage ?: 0)
+                        } else {
+                            null
+                        }
                         loadChapter(target)
                     }
                 },
@@ -480,7 +511,12 @@ private fun NovelApp() {
                     tocError = null
                 }
             },
-            onOpen = { ch -> loadChapter(ch) },
+            onOpen = { ch ->
+                resumeTarget = null
+                loadChapter(ch)
+            },
+            desc = tocDesc,
+            onToggleDesc = { tocDesc = !tocDesc },
             cachedUrls = remember(cacheTick) { contentCache.keys.toSet() },
         )
 
@@ -717,11 +753,14 @@ private fun TocScreen(
     error: String?,
     onBack: () -> Unit,
     onOpen: (BookChapter) -> Unit,
+    desc: Boolean = false,
+    onToggleDesc: () -> Unit = {},
     cachedUrls: Set<String> = emptySet(),
 ) {
     var query by remember { mutableStateOf("") }
-    // 第12批：目录正序 / 倒序开关（默认正序）。只改展示顺序，章节序号仍按原书顺序。
-    var desc by remember { mutableStateOf(false) }
+    // 第13批：正序 / 倒序开关已提升到 NovelApp 顶层（desc 参数），
+    // TocScreen 即使被重组重建也不会丢掉这个状态。
+    
     val filtered = remember(query, chapters, desc) {
         val base = if (desc) chapters.reversed() else chapters
         if (query.isBlank()) base else base.filter { it.title.contains(query, ignoreCase = true) }
@@ -756,7 +795,7 @@ private fun TocScreen(
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier
                         .clip(RoundedCornerShape(10.dp))
-                        .clickable { desc = !desc }
+                        .clickable { onToggleDesc() }
                         .padding(horizontal = 10.dp, vertical = 6.dp),
                 )
             },

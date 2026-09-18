@@ -35,6 +35,8 @@ data class ShelfEntry(
     val lastReadChapterTitle: String? = null,
     val lastReadChapterIndex: Int = -1,
     val lastReadAt: Long = 0L,
+    /** 第13批：页内位置（1 基正文页；0 = 未记录，按第 1 页起步）。 */
+    val lastReadPage: Int = 0,
 ) {
     /** 书架内的唯一键：书源地址 + 书地址。 */
     val key: String get() = sourceUrl + "|" + bookUrl
@@ -79,6 +81,7 @@ data class ShelfEntry(
             lastReadChapterTitle = old?.lastReadChapterTitle,
             lastReadChapterIndex = old?.lastReadChapterIndex ?: NO_CHAPTER,
             lastReadAt = old?.lastReadAt ?: 0L,
+            lastReadPage = old?.lastReadPage ?: 0,
         )
     }
 }
@@ -183,6 +186,7 @@ object ShelfRepository {
         bookUrl: String,
         sourceUrl: String,
         chapter: BookChapter,
+        page: Int = 0,
     ) {
         val cur = ensureLoaded(context).toMutableList()
         val i = cur.indexOfFirst { it.bookUrl == bookUrl && it.sourceUrl == sourceUrl }
@@ -192,6 +196,7 @@ object ShelfRepository {
             lastReadChapterTitle = chapter.title,
             lastReadChapterIndex = chapter.index,
             lastReadAt = System.currentTimeMillis(),
+            lastReadPage = page.coerceAtLeast(0),
         )
         cache = cur
         persist(context)
