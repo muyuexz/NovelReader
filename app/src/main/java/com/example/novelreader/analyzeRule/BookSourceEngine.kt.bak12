@@ -156,11 +156,9 @@ object BookSourceEngine {
 
             val elements = rule.getElements(chapterListRule)
             val chapters = ArrayList<BookChapter>(elements.size)
-            for (element in elements) {
+            for ((i, element) in elements.withIndex()) {
                 rule.setContent(element)
-                // 第12批：index 取真实入列位置。原先用 elements 的循环下标，
-                // 被下面的 continue 跳过空条目后会与章节真实序号错位，进度序号也跟着存错。
-                val chapter = BookChapter(bookUrl = book.bookUrl, index = chapters.size)
+                val chapter = BookChapter(bookUrl = book.bookUrl, index = i)
                 chapter.title = rule.getString(chapterNameRule).trim()
                 chapter.url = rule.getString(rt.chapterUrl, null, true)
                 if (chapter.title.isBlank() || chapter.url.isBlank()) continue

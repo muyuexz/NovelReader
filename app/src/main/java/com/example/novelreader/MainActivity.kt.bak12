@@ -362,10 +362,7 @@ private fun NovelApp() {
         shelfEntries.firstOrNull { it.bookUrl == b.bookUrl && it.sourceUrl == detailSourceUrl }
     }
     val inShelf = shelfEntryNow != null
-    // 第12批：续读定位优先按章节 URL 精确匹配；书源刷新后 URL 若有变动导致失配，
-    // 用落盘的章节序号（0 基）兜底，最后才回第一章，避免「续读掉回开头」。
     val continueChapter = chapters.firstOrNull { it.url == shelfEntryNow?.lastReadChapterUrl }
-        ?: shelfEntryNow?.lastReadChapterIndex?.takeIf { it in chapters.indices }?.let { chapters[it] }
         ?: chapters.firstOrNull()
     // onContinue 已并入详情页底部「阅读」按钮（第 4 条）
     val onToggleShelf: () -> Unit = {
@@ -411,11 +408,7 @@ private fun NovelApp() {
             if (list.isEmpty()) {
                 tocError = "目录解析为空（书源规则不匹配或网络失败）"
             } else {
-                // 第12批：同上——URL 命中优先，落盘序号兜底，最后才是第一章。
-                val target = list.firstOrNull { it.url == entry.lastReadChapterUrl }
-                    ?: entry.lastReadChapterIndex.takeIf { it in list.indices }?.let { list[it] }
-                    ?: list.first()
-                loadChapter(target)
+                loadChapter(list.firstOrNull { it.url == entry.lastReadChapterUrl } ?: list.first())
             }
         }
     }
@@ -720,18 +713,15 @@ private fun TocScreen(
     cachedUrls: Set<String> = emptySet(),
 ) {
     var query by remember { mutableStateOf("") }
-    // 第12批：目录正序 / 倒序开关（默认正序）。只改展示顺序，章节序号仍按原书顺序。
-    var desc by remember { mutableStateOf(false) }
-    val filtered = remember(query, chapters, desc) {
-        val base = if (desc) chapters.reversed() else chapters
-        if (query.isBlank()) base else base.filter { it.title.contains(query, ignoreCase = true) }
+    val filtered = remember(query, chapters) {
+        if (query.isBlank()) chapters else chapters.filter { it.title.contains(query, ignoreCase = true) }
     }
     val listState = rememberLazyListState()
 
     // 进入目录时自动滚到最近阅读的章节
-    LaunchedEffect(currentChapterUrl, filtered, desc) {
+    LaunchedEffect(currentChapterUrl, chapters) {
         if (query.isBlank()) {
-            val i = filtered.indexOfFirst { it.url == currentChapterUrl }
+            val i = chapters.indexOfFirst { it.url == currentChapterUrl }
             if (i >= 0) listState.scrollToItem(i)
         }
     }
@@ -748,18 +738,6 @@ private fun TocScreen(
                 book.author.takeIf { it.isNotBlank() },
                 if (chapters.isNotEmpty()) "共 ${chapters.size} 章" else null,
             ).joinToString(" · ").ifBlank { null },
-            // 第12批：右上角正序 / 倒序切换
-            trailing = {
-                Text(
-                    text = if (desc) "倒序 ↓" else "正序 ↑",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .clickable { desc = !desc }
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                )
-            },
         )
 
         if (chapters.isNotEmpty()) {
@@ -804,10 +782,9 @@ private fun TocScreen(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(bottom = 24.dp),
                 ) {
-                    items(filtered, key = { ch -> ch.url + "|" + ch.index }) { ch ->
+                    itemsIndexed(filtered, key = { _, ch -> ch.url + "|" + ch.index }) { pos, ch ->
                         val current = currentChapterUrl != null && ch.url == currentChapterUrl
-                        // 第12批：序号取自章节自身 index，正序 / 倒序都显示原书章节号。
-                        ChapterRow(index = ch.index + 1, chapter = ch, current = current, cached = cachedUrls.contains(ch.url)) { onOpen(ch) }
+                        ChapterRow(index = pos + 1, chapter = ch, current = current, cached = cachedUrls.contains(ch.url)) { onOpen(ch) }
                     }
                 }
             }
