@@ -18,6 +18,8 @@ class Book(
     var tocUrl: String = "",
     var wordCount: String? = null,
     var lastChapter: String? = null,
+    /** 书籍最新状态：连载中 / 已完结（来自详情页规则，Legado 同名字段）。 */
+    var status: String? = null,
     var origin: String = "",
     var originName: String = "",
     var type: Int = 0,

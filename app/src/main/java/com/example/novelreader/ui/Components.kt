@@ -30,12 +30,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.novelreader.analyzeRule.Book
+import coil.compose.SubcomposeAsyncImage
 import kotlin.math.abs
 
 /* ------------------------------------------------------------------ *
@@ -160,16 +162,48 @@ private val CoverShades = listOf(
 
 @Composable
 fun CoverBadge(name: String, modifier: Modifier = Modifier) {
+    CoverBadgeInner(
+        name = name,
+        modifier = modifier
+            .size(width = 46.dp, height = 60.dp)
+            .clip(RoundedCornerShape(10.dp)),
+    )
+}
+
+/** 封面渐变底本体（占位 / 加载中 / 加载失败时复用）。 */
+@Composable
+private fun CoverBadgeInner(name: String, modifier: Modifier = Modifier.fillMaxSize()) {
     val initial = name.trim().firstOrNull()?.toString() ?: "书"
     val shade = remember(name) { CoverShades[abs(name.hashCode()) % CoverShades.size] }
     Box(
-        modifier = modifier
-            .size(width = 46.dp, height = 60.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(Brush.linearGradient(shade)),
+        modifier = modifier.background(Brush.linearGradient(shade)),
         contentAlignment = Alignment.Center,
     ) {
         Text(text = initial, color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+/**
+ * 封面缩略图：有 [coverUrl] 走 Coil 网络图，加载中 / 失败回落首字渐变占位。
+ * 搜索结果的封面（第 7 条）走这里。
+ */
+@Composable
+fun CoverThumb(coverUrl: String?, name: String, modifier: Modifier = Modifier) {
+    val label = name.ifBlank { "书" }
+    val frame = modifier
+        .size(width = 46.dp, height = 60.dp)
+        .clip(RoundedCornerShape(10.dp))
+    if (coverUrl.isNullOrBlank()) {
+        CoverBadgeInner(label, frame)
+    } else {
+        SubcomposeAsyncImage(
+            model = coverUrl,
+            contentDescription = label,
+            modifier = frame,
+            contentScale = ContentScale.Crop,
+            loading = { CoverBadgeInner(label) },
+            error = { CoverBadgeInner(label) },
+        )
     }
 }
 
@@ -190,7 +224,7 @@ fun BookCard(book: Book, onClick: () -> Unit) {
                 .padding(12.dp),
             verticalAlignment = Alignment.Top,
         ) {
-            CoverBadge(book.name.ifBlank { "书" })
+            CoverThumb(book.coverUrl, book.name.ifBlank { "书" })
             Spacer(Modifier.width(13.dp))
             Column(Modifier.weight(1f)) {
                 Text(

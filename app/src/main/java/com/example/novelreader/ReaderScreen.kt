@@ -75,7 +75,7 @@ fun ReaderScreen(
     loading: Boolean,
     chapters: List<BookChapter>,
     onOpenChapter: (BookChapter) -> Unit,
-    onBack: () -> Unit,
+    onOpenToc: () -> Unit,
 ) {
     val context = LocalContext.current
     val prefs = remember {
@@ -135,9 +135,6 @@ fun ReaderScreen(
                     Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    TextButton(onClick = onBack) {
-                        Text("‹ 目录", color = palette.sub, fontSize = 14.sp)
-                    }
                     Text(
                         text = chapter.title.ifBlank { "正文" },
                         modifier = Modifier.weight(1f),
@@ -154,6 +151,10 @@ fun ReaderScreen(
                     )
                     TextButton(onClick = { showPanel = !showPanel }) {
                         Text("Aa", color = if (showPanel) palette.fg else palette.sub, fontSize = 15.sp)
+                    }
+                    // 第 3 条：目录入口挪到右上角
+                    TextButton(onClick = onOpenToc) {
+                        Text("目录", color = palette.sub, fontSize = 14.sp)
                     }
                 }
             }

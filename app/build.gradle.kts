@@ -106,6 +106,10 @@ dependencies {
     // --- Coroutines ---
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 
+    // --- 图片加载（搜索结果 / 详情页封面）---
+    // 2.6.0 对齐 Compose 1.6.x（BOM 2024.06.00），不能用 3.x（要 Compose 1.7+）。
+    implementation("io.coil-kt:coil-compose:2.6.0")
+
     // --- Tests ---
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")

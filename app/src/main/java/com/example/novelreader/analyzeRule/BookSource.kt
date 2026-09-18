@@ -99,6 +99,7 @@ class RuleBookInfo(
     var kind: String? = null,
     var wordCount: String? = null,
     var lastChapter: String? = null,
+    var status: String? = null,
     var intro: String? = null,
     var coverUrl: String? = null,
     var tocUrl: String? = null,

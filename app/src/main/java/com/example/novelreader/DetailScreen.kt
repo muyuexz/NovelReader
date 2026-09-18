@@ -31,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -39,6 +40,7 @@ import com.example.novelreader.analyzeRule.Book
 import com.example.novelreader.analyzeRule.BookChapter
 import com.example.novelreader.ui.AppHeader
 import com.example.novelreader.ui.TagPill
+import coil.compose.SubcomposeAsyncImage
 import kotlin.math.abs
 
 /* ==================================================================== *
@@ -52,7 +54,6 @@ fun DetailScreen(
     loading: Boolean,
     error: String?,
     inShelf: Boolean,
-    onBack: () -> Unit,
     onToggleShelf: () -> Unit,
     onRead: () -> Unit,
     onContinue: (() -> Unit)?,
@@ -80,7 +81,8 @@ fun DetailScreen(
         loading -> "…"
         else -> "—"
     }
-    val wordText = book.wordCount?.takeIf { it.isNotBlank() } ?: "未知"
+    val wordText = formatWordCount(book.wordCount)
+    val statusText = book.status?.takeIf { it.isNotBlank() } ?: "未知"
     val updateText = remember(chapters) {
         formatTime(chapters.mapNotNull { it.updateTime }.maxOrNull())
     }
@@ -92,9 +94,7 @@ fun DetailScreen(
             .windowInsetsPadding(WindowInsets.systemBars),
     ) {
         AppHeader(
-            title = "书籍详情",
-            subtitle = book.originName.takeIf { it.isNotBlank() },
-            onBack = onBack,
+            title = "书籍信息",
             trailing = { if (inShelf) TagPill("已在书架") },
         )
 
@@ -106,7 +106,7 @@ fun DetailScreen(
         ) {
             // —— 封面 + 主信息 ——
             Row(verticalAlignment = Alignment.Top) {
-                BigCover(book.name)
+                BigCover(book.coverUrl, book.name)
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
@@ -144,6 +144,25 @@ fun DetailScreen(
                     StatCell("章节数", chapterText, Modifier.weight(1f))
                     StatCell("总字数", wordText, Modifier.weight(1f))
                     StatCell("最近更新", updateText, Modifier.weight(1f))
+                }
+            }
+
+            // —— 信息区（对齐 Legado 详情页）：来源 / 分类 / 状态 / 最新章节 ——
+            Spacer(Modifier.height(14.dp))
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            ) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp)) {
+                    InfoRow("来源", book.originName.takeIf { it.isNotBlank() } ?: "未知")
+                    InfoRow("分类", kinds.joinToString("·").takeIf { it.isNotBlank() } ?: "未分组")
+                    InfoRow("状态", statusText)
+                    InfoRow("最新章节", lastChapter ?: "未知")
+                    chapters.firstOrNull()?.title?.takeIf { it.isNotBlank() }?.let {
+                        InfoRow("首章", it)
+                    }
                 }
             }
 
@@ -197,19 +216,6 @@ fun DetailScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
-            if (lastChapter != null) {
-                Spacer(Modifier.height(20.dp))
-                Text("最新章节", style = MaterialTheme.typography.titleMedium)
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = lastChapter,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-
             Spacer(Modifier.height(30.dp))
         }
     }
@@ -233,6 +239,25 @@ private fun StatCell(label: String, value: String, modifier: Modifier = Modifier
     }
 }
 
+@Composable
+private fun InfoRow(label: String, value: String) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 7.dp)) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.width(64.dp),
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.weight(1f),
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
 private val BigCoverShades = listOf(
     listOf(Color(0xFF7C4DFF), Color(0xFF5E35B1)),
     listOf(Color(0xFF3F51B5), Color(0xFF283593)),
@@ -241,14 +266,34 @@ private val BigCoverShades = listOf(
 )
 
 @Composable
-private fun BigCover(name: String) {
+private fun BigCover(coverUrl: String?, name: String) {
     val initial = name.trim().firstOrNull()?.toString() ?: "书"
     val shade = remember(name) { BigCoverShades[abs(name.hashCode()) % BigCoverShades.size] }
+    val frame = Modifier
+        .size(width = 92.dp, height = 124.dp)
+        .clip(RoundedCornerShape(14.dp))
+    if (!coverUrl.isNullOrBlank()) {
+        SubcomposeAsyncImage(
+            model = coverUrl,
+            contentDescription = name,
+            modifier = frame,
+            contentScale = ContentScale.Crop,
+            loading = { CoverFallback(initial, shade) },
+            error = { CoverFallback(initial, shade) },
+        )
+    } else {
+        CoverFallback(initial, shade, frame)
+    }
+}
+
+@Composable
+private fun CoverFallback(
+    initial: String,
+    shade: List<Color>,
+    modifier: Modifier = Modifier.fillMaxSize(),
+) {
     Box(
-        modifier = Modifier
-            .size(width = 92.dp, height = 124.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(Brush.linearGradient(shade)),
+        modifier = modifier.background(Brush.linearGradient(shade)),
         contentAlignment = Alignment.Center,
     ) {
         Text(text = initial, color = Color.White, fontSize = 40.sp, fontWeight = FontWeight.Bold)
@@ -262,4 +307,22 @@ private fun formatTime(ts: Long?): String {
     return runCatching {
         java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.CHINA).format(java.util.Date(ms))
     }.getOrDefault("未知")
+}
+
+/**
+ * 总字数格式化：「5485000」这类纯数字折算成「548.5万」，
+ * 已带单位（万/字/W）的文本原样保留，拿不到就回落「未知」。
+ */
+private fun formatWordCount(raw: String?): String {
+    val text = raw?.trim().orEmpty()
+    if (text.isEmpty()) return "未知"
+    if (text.any { it == '万' || it == '字' || it == 'W' || it == 'w' }) return text
+    val n = text.filter { it.isDigit() }.toLongOrNull() ?: return text
+    return if (n >= 10_000L) {
+        val w = n / 10_000.0
+        if (w >= 100.0) String.format(java.util.Locale.CHINA, "%.0f万", w)
+        else String.format(java.util.Locale.CHINA, "%.1f万", w)
+    } else {
+        "$n字"
+    }
 }

@@ -126,6 +126,8 @@ private fun NovelApp() {
     var currentChapter by remember { mutableStateOf<BookChapter?>(null) }
     var content by remember { mutableStateOf("") }
     var loadingContent by remember { mutableStateOf(false) }
+    // 阅读页右上角「目录」：在阅读态上层叠出目录页
+    var showReaderToc by remember { mutableStateOf(false) }
     // 记录最近阅读的章节，返回目录时可高亮
     var lastChapterUrl by remember { mutableStateOf<String?>(null) }
 
@@ -162,6 +164,7 @@ private fun NovelApp() {
         chapters = emptyList()
         tocError = null
         lastChapterUrl = null
+        showReaderToc = false
         loadingToc = true
         scope.launch {
             val list = withContext(Dispatchers.IO) {
@@ -199,9 +202,11 @@ private fun NovelApp() {
         content = ""
         loadingContent = true
         scope.launch {
-            val txt = withContext(Dispatchers.IO) {
-                // 阅读进度写进书架（不在书架里则无操作）
+            // 进度写入与正文拉取并发：进度是本地 IO，不该拖慢正文首屏（第 8 条）
+            launch(Dispatchers.IO) {
                 runCatching { ShelfRepository.updateProgress(context, b.bookUrl, src.bookSourceUrl, ch) }
+            }
+            val txt = withContext(Dispatchers.IO) {
                 runCatching { BookSourceEngine.getContent(src, b, ch) }.getOrDefault("")
             }
             // 快速连点翻章时，只有仍是最新选中的章节才允许回填，避免串台。
@@ -220,9 +225,14 @@ private fun NovelApp() {
     // 只在"还有上一级"的状态下拦截，根页面交还系统。
     BackHandler(enabled = openBookNow != null || homeTab == 1) {
         when {
+            // 阅读页的目录浮层优先关掉
+            showReaderToc -> {
+                showReaderToc = false
+            }
             openChapter != null -> {
                 currentChapter = null
                 content = ""
+                showReaderToc = false
             }
             showDetail -> {
                 showDetail = false
@@ -281,6 +291,7 @@ private fun NovelApp() {
         chapters = emptyList()
         tocError = null
         lastChapterUrl = entry.lastReadChapterUrl
+        showReaderToc = false
         loadingToc = true
         scope.launch {
             val list = withContext(Dispatchers.IO) {
@@ -305,15 +316,26 @@ private fun NovelApp() {
     }
 
     when {
-        openBookNow != null && openChapter != null -> ReaderScreen(
+        openBookNow != null && openChapter != null && !showReaderToc -> ReaderScreen(
             chapter = openChapter,
             content = content,
             loading = loadingContent,
             chapters = chapters,
             onOpenChapter = loadChapter,
-            onBack = {
-                currentChapter = null
-                content = ""
+            onOpenToc = { showReaderToc = true },
+        )
+
+        // 阅读页点「目录」：目录叠在阅读之上，选中章节后回到阅读
+        openBookNow != null && showReaderToc -> TocScreen(
+            book = openBookNow,
+            chapters = chapters,
+            currentChapterUrl = lastChapterUrl,
+            loading = loadingToc,
+            error = tocError,
+            onBack = { showReaderToc = false },
+            onOpen = { ch ->
+                showReaderToc = false
+                loadChapter(ch)
             },
         )
 
@@ -323,13 +345,6 @@ private fun NovelApp() {
             loading = loadingToc,
             error = tocError,
             inShelf = inShelf,
-            onBack = {
-                showDetail = false
-                detailBook = null
-                currentBook = null
-                chapters = emptyList()
-                tocError = null
-            },
             onToggleShelf = onToggleShelf,
             onRead = { showDetail = false },
             onContinue = onContinue,
@@ -442,6 +457,11 @@ private fun SearchScreen(
     onSearch: () -> Unit,
     onOpen: (Book) -> Unit,
 ) {
+    val listState = rememberLazyListState()
+    // 第 1 条：每次结果刷新后回到顶部，不再停留在上次的滚动位置
+    LaunchedEffect(hits) {
+        if (hits.isNotEmpty()) runCatching { listState.scrollToItem(0) }
+    }
     Column(
         Modifier
             .fillMaxSize()
@@ -537,6 +557,7 @@ private fun SearchScreen(
                     }
                     Spacer(Modifier.height(10.dp))
                     LazyColumn(
+                        state = listState,
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -608,7 +629,6 @@ private fun TocScreen(
                 book.author.takeIf { it.isNotBlank() },
                 if (chapters.isNotEmpty()) "共 ${chapters.size} 章" else null,
             ).joinToString(" · ").ifBlank { null },
-            onBack = onBack,
         )
 
         if (chapters.isNotEmpty()) {

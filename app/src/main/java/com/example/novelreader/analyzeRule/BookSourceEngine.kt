@@ -122,6 +122,7 @@ object BookSourceEngine {
             rule.getString(rbi.intro).takeIf { it.isNotBlank() }?.let { book.intro = it }
             rule.getString(rbi.wordCount).takeIf { it.isNotBlank() }?.let { book.wordCount = it }
             rule.getString(rbi.lastChapter).takeIf { it.isNotBlank() }?.let { book.lastChapter = it }
+            rule.getString(rbi.status).takeIf { it.isNotBlank() }?.let { book.status = it }
             rule.getString(rbi.coverUrl, null, true).takeIf { it.isNotBlank() }?.let { book.coverUrl = it }
 
             val tocUrl = rule.getString(rbi.tocUrl, null, true)
@@ -164,6 +165,7 @@ object BookSourceEngine {
                 rule.getString(rt.isVip).takeIf { it.isNotBlank() }?.let {
                     chapter.isVip = it != "0" && it != "false"
                 }
+                chapter.updateTime = parseUpdateTime(rule.getString(rt.updateTime))
                 chapters += chapter
             }
             chapters
@@ -269,6 +271,46 @@ object BookSourceEngine {
         s = RE_BLANK_LINES.replace(s, "\n\n")
         s = s.lines().joinToString("\n") { it.trimEnd() }
         return s.trim()
+    }
+
+    /**
+     * 目录项「最近更新」时间解析：把书源规则抓到的字符串转成毫秒时间戳。
+     *
+     * 真实书源的更新时间格式五花八门（`2024-05-01`、`2024-05-01 12:30`、
+     * `05-01 12:30`、纯秒/毫秒时间戳），这里按「数字时间戳 → 常见日期格式」顺序试，
+     * 全部失败返回 null（UI 侧回落「未知」），绝不臆测一个假时间。
+     */
+    private val UPDATE_TIME_PATTERNS = listOf(
+        "yyyy-MM-dd HH:mm:ss",
+        "yyyy-MM-dd HH:mm",
+        "yyyy-MM-dd",
+        "yyyy/MM/dd HH:mm:ss",
+        "yyyy/MM/dd HH:mm",
+        "yyyy/MM/dd",
+        "MM-dd HH:mm",
+        "MM-dd",
+    )
+
+    private fun parseUpdateTime(raw: String?): Long? {
+        val text = raw?.trim().orEmpty()
+        if (text.isEmpty()) return null
+
+        // 1) 纯数字：>= 1e12 视为毫秒，否则视为秒。
+        text.toLongOrNull()?.let { n ->
+            return when {
+                n >= 1_000_000_000_000L -> n
+                n > 0L -> n * 1000L
+                else -> null
+            }
+        }
+
+        // 2) 抠掉「更新：」之类前缀后按常见格式试。
+        val stripped = text.replace(Regex("^[^0-9]*"), "")
+        for (p in UPDATE_TIME_PATTERNS) {
+            val fmt = java.text.SimpleDateFormat(p, java.util.Locale.CHINA).apply { isLenient = true }
+            runCatching { fmt.parse(stripped) }.getOrNull()?.let { return it.time }
+        }
+        return null
     }
 
     /** 书名与关键词的匹配档次：0=完全相等，1=前缀，2=包含，3=无关。 */
