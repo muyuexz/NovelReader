@@ -20,6 +20,15 @@ object BookSourceEngine {
     /** 正文分页上限，防 `nextContentUrl` 自环或书源规则写错导致死循环。 */
     private const val MAX_CONTENT_PAGES = 20
 
+    /**
+     * 第31批：分页链「串章」识别。
+     * 中文章节站里 `text.下一@href` 之类规则会同时命中「下一页」与「下一章」，
+     * 导致把后续章节正文一段段拼进当前章（页数暴涨）。第 2 页起，
+     * 若新拉到的正文以「第X章」开头即判定串章，停止拼接。
+     */
+    private val RE_CHAPTER_HEAD =
+        Regex("^第[0-9０-９零一二三四五六七八九十百千万两]{1,10}[章節节]")
+
     // ── 分阶段请求超时（毫秒）──────────────────────────────────────────────
     // 网络层全局默认是 30s，对「点进去看目录」这种交互来说是灾难级体验：
     // 一条死源就能让用户白等半分钟。这里按阶段收紧，坏源快速失败、快速跳到下一源。
@@ -220,8 +229,11 @@ object BookSourceEngine {
         return runCatching {
             val sb = StringBuilder()
             var currentUrl = chapter.url
+            // 第31批：记录分页链已访问地址，防止「下一页/下一章」规则互跳（A→B→A）重复拼接。
+            val visited = HashSet<String>()
             var page = 0
             while (currentUrl.isNotBlank() && page++ < MAX_CONTENT_PAGES) {
+                if (!visited.add(currentUrl)) break
                 val analyzeUrl = AnalyzeUrlCore(
                     rawUrl = currentUrl,
                     baseUrl = book.bookUrl,
@@ -240,12 +252,19 @@ object BookSourceEngine {
 
                 val text = rule.getString(contentRule)
                 if (text.isNotBlank()) {
+                    // 第31批：第2页起若正文以章节标题开头，说明分页链串到了下一章，直接停。
+                    if (page > 1 && RE_CHAPTER_HEAD.containsMatchIn(text.trimStart().take(30))) break
                     if (sb.isNotEmpty()) sb.append('\n')
                     sb.append(text)
                 }
 
+                // 第31批：nextContentUrl 可能一次解析出多个地址，取第一个非空且未访问的。
                 val next = rule.getString(rc.nextContentUrl, null, true)
-                if (next.isBlank() || next == currentUrl) break
+                    .split('\n', '\r', ',', '，', ' ', '\t')
+                    .map { it.trim() }
+                    .firstOrNull { it.isNotBlank() && it !in visited && it != currentUrl }
+                    ?: ""
+                if (next.isBlank()) break
                 currentUrl = next
             }
             cleanContent(sb.toString())
