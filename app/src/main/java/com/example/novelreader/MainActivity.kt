@@ -61,6 +61,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.novelreader.analyzeRule.Book
 import com.example.novelreader.analyzeRule.BookChapter
+import com.example.novelreader.analyzeRule.BookSource
+import com.example.novelreader.analyzeRule.BookSourceParser
+import com.example.novelreader.analyzeRule.Network
 import com.example.novelreader.analyzeRule.BookSourceEngine
 import com.example.novelreader.ui.AppHeader
 import com.example.novelreader.ui.BookCard
@@ -115,6 +118,10 @@ private fun NovelApp() {
     var sourceCount by remember { mutableStateOf(0) }
     var sourceFailed by remember { mutableStateOf(0) }
 
+    // 第21批：书源管理页展示的完整列表 + 操作结果提示（导入/删除后回灌）
+    var sourceList by remember { mutableStateOf(listOf<BookSource>()) }
+    var sourceNotice by remember { mutableStateOf<String?>(null) }
+
     // 搜索
     var keyword by remember { mutableStateOf("") }
     var searching by remember { mutableStateOf(false) }
@@ -166,14 +173,17 @@ private fun NovelApp() {
         }
     }
 
-    LaunchedEffect(Unit) {
-        val info = withContext(Dispatchers.IO) {
-            SourceRepository.ensureLoaded(context)
-            SourceRepository.totalCount to SourceRepository.parseFailedCount
-        }
-        sourceCount = info.first
-        sourceFailed = info.second
+    // 第21批：把仓库当前状态回灌到 UI 状态（首次加载 / 导入 / 删除 / 启停后都要走一遍）。
+    val refreshSources: () -> Unit = {
+        sourceCount = SourceRepository.totalCount
+        sourceFailed = SourceRepository.parseFailedCount
+        sourceList = SourceRepository.snapshot()
         sourcesLoaded = true
+    }
+
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) { SourceRepository.ensureLoaded(context) }
+        refreshSources()
         shelfEntries = withContext(Dispatchers.IO) {
             runCatching { ShelfRepository.all(context) }.getOrDefault(emptyList())
         }
@@ -328,7 +338,7 @@ private fun NovelApp() {
     // 系统返回（返回手势 / 返回键）接入：与各页左上角按钮走同一套回退逻辑。
     // 层级：正文章 → 详情 → 目录 → 发现页 → 书架 → 退出 App。
     // 只在"还有上一级"的状态下拦截，根页面交还系统。
-    BackHandler(enabled = openBookNow != null || homeTab == 1) {
+    BackHandler(enabled = openBookNow != null || homeTab != 0) {
         when {
             // 阅读页的目录浮层优先关掉
             showReaderToc -> {
@@ -546,7 +556,7 @@ private fun NovelApp() {
                             refreshShelf()
                         },
                     )
-                } else {
+                } else if (homeTab == 1) {
                     SearchScreen(
                         keyword = keyword,
                         onKeywordChange = { keyword = it },
@@ -571,6 +581,73 @@ private fun NovelApp() {
                         },
                         onOpen = openDetail,
                     )
+                } else {
+                    SourceManagerScreen(
+                        sources = sourceList,
+                        notice = sourceNotice,
+                        onBack = { homeTab = 0 },
+                        onImportText = { text ->
+                            scope.launch {
+                                val msg = withContext(Dispatchers.IO) {
+                                    if (text.isBlank()) {
+                                        "读取文件失败，请换一个文件试试"
+                                    } else {
+                                        val (ok, _) = runCatching {
+                                            BookSourceParser.parseLenient(text)
+                                        }.getOrElse { emptyList<BookSource>() to 0 }
+                                        if (ok.isEmpty()) {
+                                            "没有解析到有效书源，请确认是 Legado 书源 JSON"
+                                        } else {
+                                            val added = SourceRepository.import(context, ok)
+                                            "导入完成：解析 ${ok.size} 条，新增 ${added} 条"
+                                        }
+                                    }
+                                }
+                                refreshSources()
+                                sourceNotice = msg
+                            }
+                        },
+                        onImportNetwork = { url ->
+                            scope.launch {
+                                val msg = withContext(Dispatchers.IO) {
+                                    val text = runCatching { Network.fetch(url) }.getOrNull()
+                                    if (text.isNullOrBlank()) {
+                                        "网络拉取失败，请检查链接是否可直连"
+                                    } else {
+                                        val (ok, _) = runCatching {
+                                            BookSourceParser.parseLenient(text)
+                                        }.getOrElse { emptyList<BookSource>() to 0 }
+                                        if (ok.isEmpty()) {
+                                            "该链接没有解析到有效书源"
+                                        } else {
+                                            val added = SourceRepository.import(context, ok)
+                                            "导入完成：解析 ${ok.size} 条，新增 ${added} 条"
+                                        }
+                                    }
+                                }
+                                refreshSources()
+                                sourceNotice = msg
+                            }
+                        },
+                        onDelete = { keys ->
+                            scope.launch {
+                                val removed = withContext(Dispatchers.IO) {
+                                    SourceRepository.delete(context, keys)
+                                }
+                                refreshSources()
+                                sourceNotice = "已删除 ${removed} 条书源"
+                            }
+                        },
+                        onToggle = { key, en ->
+                            scope.launch {
+                                withContext(Dispatchers.IO) {
+                                    SourceRepository.setEnabled(context, key, en)
+                                }
+                                refreshSources()
+                            }
+                        },
+                        onClearNotice = { sourceNotice = null },
+                    )
                 }
             }
             NavigationBar {
@@ -588,6 +665,16 @@ private fun NovelApp() {
                     onClick = { homeTab = 1 },
                     icon = { Text("🔍", fontSize = 18.sp) },
                     label = { Text("发现") },
+                )
+                NavigationBarItem(
+                    selected = homeTab == 2,
+                    onClick = {
+                        sourceNotice = null
+                        refreshSources()
+                        homeTab = 2
+                    },
+                    icon = { Text("🗂", fontSize = 18.sp) },
+                    label = { Text("书源") },
                 )
             }
         }
@@ -795,7 +882,7 @@ private fun TocScreen(
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier
                         .clip(RoundedCornerShape(10.dp))
-                        .clickable {
+                        .clickable(enabled = filtered.isNotEmpty()) {
                             if (filtered.isNotEmpty()) {
                                 val target = if (jumpToEnd) filtered.lastIndex else 0
                                 scrollScope.launch { listState.animateScrollToItem(target) }

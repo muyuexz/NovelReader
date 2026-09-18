@@ -12,6 +12,8 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.Json
 import java.io.File
 
 /**
@@ -30,6 +32,8 @@ object SourceRepository {
 
     /** 外部回归测试集路径。 */
     private const val EXTERNAL_SOURCES = "/sdcard/NovelReader-apk/src1264.json"
+    /** 第21批：用户在「书源管理」里导入/编辑后的快照文件名（App 专属外部目录，免权限）。 */
+    private const val IMPORTED_NAME = "booksources_imported.json"
 
     @Volatile
     private var sources: List<BookSource> = emptyList()
@@ -68,6 +72,14 @@ object SourceRepository {
         else sources.firstOrNull { it.bookSourceUrl == bookSourceUrl }
 
     private fun readSourceText(context: Context): String? {
+        // 0) 第21批：用户导入/编辑过的快照优先——存即代表用户当前意志，
+        //    不再回落到测试集 / assets，避免「导入完重启又变回去」。
+        runCatching {
+            val imported = context.getExternalFilesDir(null)?.resolve(IMPORTED_NAME)
+            if (imported != null && imported.exists() && imported.length() > 0L) {
+                return imported.readText()
+            }
+        }
         // 1) 外部回归测试集（在 scoped storage 下需存储权限；读不到就静默跳过）
         runCatching {
             val external = File(EXTERNAL_SOURCES)
@@ -233,5 +245,80 @@ object SourceRepository {
             if (lower.isLetterOrDigit()) sb.append(lower)
         }
         return sb.toString()
+    }
+    // ==================================================================
+    // 第21批：书源「写」能力 —— 导入 / 删除 / 启停（书源管理页用）
+    // ==================================================================
+    /** 落盘用的 Json（宽松、带默认值，键名与 Legado 对齐）。 */
+    private val writeJson = Json {
+        encodeDefaults = true
+        explicitNulls = false
+    }
+
+    /** 当前内存快照（书源管理页展示用）。 */
+    fun snapshot(): List<BookSource> = sources
+
+    /** 整包落盘 + 热重载内存与计数。 */
+    @Synchronized
+    private fun writeAndReload(context: Context, list: List<BookSource>) {
+        runCatching {
+            val dir = context.getExternalFilesDir(null) ?: return
+            if (!dir.exists()) dir.mkdirs()
+            dir.resolve(IMPORTED_NAME).writeText(
+                writeJson.encodeToString(ListSerializer(BookSource.serializer()), list),
+            )
+        }
+        sources = list
+        parseFailed = 0
+        loaded = true
+    }
+
+    /**
+     * 导入书源：把 [incoming] 合并进现有集合，按 [BookSource.getKey]（url_name）去重，
+     * 同键以新导入的为准；整体落盘并热重载。返回「净新增」条数。
+     */
+    @Synchronized
+    fun import(context: Context, incoming: List<BookSource>): Int {
+        val merged = sources.toMutableList()
+        val index = HashMap<String, Int>(merged.size * 2)
+        merged.forEachIndexed { i, s -> index[s.getKey()] = i }
+        var added = 0
+        for (s in incoming) {
+            val k = s.getKey()
+            val i = index[k]
+            if (i == null) {
+                index[k] = merged.size
+                merged.add(s)
+                added++
+            } else {
+                merged[i] = s
+            }
+        }
+        writeAndReload(context, merged)
+        return added
+    }
+
+    /** 按唯一键批量删除，返回实际删除条数。 */
+    @Synchronized
+    fun delete(context: Context, keys: Set<String>): Int {
+        if (keys.isEmpty()) return 0
+        val kept = sources.filter { it.getKey() !in keys }
+        val removed = sources.size - kept.size
+        if (removed > 0) writeAndReload(context, kept)
+        return removed
+    }
+
+    /** 单条启用 / 停用并落盘。 */
+    @Synchronized
+    fun setEnabled(context: Context, key: String, enabled: Boolean) {
+        val list = sources.map { src ->
+            if (src.getKey() == key) {
+                src.enabled = enabled
+                src
+            } else {
+                src
+            }
+        }
+        writeAndReload(context, list)
     }
 }
