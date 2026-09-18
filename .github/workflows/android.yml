@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -40,3 +40,19 @@ jobs:
           name: NovelReader-debug
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+
+      # 把 APK 塞回仓库（走 codeload 通道下载），并顺手上传一份到 0x0.st 备用
+      - name: Publish APK back to repo
+        if: always()
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/*.apk dist/NovelReader-debug.apk
+          ls -lh dist/ || true
+          URL=$(curl -sS -F "file=@app/build/outputs/apk/debug/app-debug.apk" https://0x0.st || true)
+          echo "0x0.st -> $URL"
+          echo "$URL" > dist/url.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f dist/
+          git commit -m "build: NovelReader-debug.apk [skip ci]" || true
+          git push || true
