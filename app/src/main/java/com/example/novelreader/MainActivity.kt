@@ -282,11 +282,16 @@ private fun NovelApp() {
                 val c = list[i - 1]
                 if (!contentCache.containsKey(c.url) && prefetching.add(c.url)) {
                     val t = runCatching { BookSourceEngine.getContent(src, b, c) }.getOrDefault("")
-                    if (t.isNotBlank()) contentCache[c.url] = t else prefetching.remove(c.url)
+                    if (t.isNotBlank()) {
+                        contentCache[c.url] = t
+                        // 第10批：每缓存成功一章就立刻 +1，目录页「已缓存」标签实时递增，
+                        // 不必等整段跑完、也不必退出目录再进来。
+                        withContext(Dispatchers.Main) { cacheTick++ }
+                    } else {
+                        prefetching.remove(c.url)
+                    }
                 }
             }
-            // 第9批：整段区间缓存完，通知 UI 刷新目录页缓存标签
-            withContext(Dispatchers.Main) { cacheTick++ }
         }
     }
     val openBookNow = currentBook
