@@ -1,5 +1,6 @@
 package com.example.novelreader
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -72,6 +73,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
@@ -782,6 +784,13 @@ private fun FullTextSearchPage(
     var scanned by remember { mutableStateOf(0) }
     var totalCount by remember { mutableStateOf(0) }
     var hits by remember { mutableStateOf(emptyList<SearchHit>()) }
+    // 第19批：失败章节数（覆盖度反馈用）。
+    var failed by remember { mutableStateOf(0) }
+    val ctx = LocalContext.current
+    // 第19批：内层返回拦截。全文搜索是阅读页内部的覆盖层，
+    // 系统返回手势在这里先被本回调吃掉，只关闭搜索页、留在阅读页；
+    // 否则会落到 MainActivity 的回退链上，把阅读页一起弹回详情页。
+    BackHandler(enabled = true) { onClose() }
     // 第18批：结果列表滚动状态 + 一键跳首/尾。
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -812,6 +821,9 @@ private fun FullTextSearchPage(
             scanning = false
             return@LaunchedEffect
         }
+        // 第19批：本轮补拉失败计数（IO 线程写入，用原子量）。
+        val failCount = AtomicInteger(0)
+        failed = 0
         val found = ArrayList<SearchHit>()
         // 第18批：结果按章节正序排序用的索引表（章节 url 到书内序号）。
         val order = list.withIndex().associate { it.value.url to it.index }
@@ -824,17 +836,42 @@ private fun FullTextSearchPage(
                 async(Dispatchers.IO) {
                     sem.withPermit {
                         val cached = cache[c.url]
+                        // 第19批：三级回退 —— 会话缓存 → 磁盘缓存 → 联网补拉（带重试）。
+                        // 磁盘缓存让覆盖度跨会话累积：每轮搜索都在上一轮成果上补齐缺失章节，
+                        // 命中数因此能持续向全书真实值收敛，而不是每轮原样复现同一批失败。
+                        val fromDisk = if (cached.isNullOrEmpty()) ChapterDiskCache.get(ctx, c.url) else null
                         val body = when {
                             c.url == currentChapterUrl && currentContent.isNotBlank() -> currentContent
                             !cached.isNullOrEmpty() -> cached
-                            source != null -> runCatching {
-                                BookSourceEngine.getContent(source, book!!, c)
-                            }.getOrDefault("")
-                            else -> ""
+                            fromDisk != null -> {
+                                onCacheLoaded(c.url, fromDisk)
+                                fromDisk
+                            }
+                            source != null -> {
+                                // 最多 3 次尝试，失败退避 300ms / 800ms；
+                                // 仍拿不到就计入失败数，由顶栏覆盖度如实报出来。
+                                var got = ""
+                                var attempt = 0
+                                while (attempt < 3 && got.isEmpty()) {
+                                    if (attempt > 0) delay(if (attempt == 1) 300L else 800L)
+                                    got = runCatching {
+                                        BookSourceEngine.getContent(source, book!!, c)
+                                    }.getOrDefault("")
+                                    attempt++
+                                }
+                                if (got.isEmpty()) failCount.incrementAndGet()
+                                got
+                            }
+                            else -> {
+                                failCount.incrementAndGet()
+                                ""
+                            }
                         }
                         // 补拉到的正文回灌缓存（不覆盖已有内容）。
                         if (body.isNotEmpty() && c.url != currentChapterUrl && cached.isNullOrEmpty()) {
                             onCacheLoaded(c.url, body)
+                        // 第19批：同步落盘，下一轮搜索直接复用，不再重下。
+                        ChapterDiskCache.put(ctx, c.url, body)
                         }
                         val hit = countHits(key, c, body)
                         if (hit != null) {
@@ -850,6 +887,7 @@ private fun FullTextSearchPage(
                                 scanned = d
                                 hits = snap
                                 totalCount = snap.sumOf { it.count }
+                                failed = failCount.get()
                             }
                         }
                     }
@@ -860,6 +898,7 @@ private fun FullTextSearchPage(
         val snap = synchronized(found) { found.sortedBy { order[it.chapter.url] ?: Int.MAX_VALUE } }
         hits = snap
         totalCount = snap.sumOf { it.count }
+        failed = failCount.get()
         scanned = total
     }
 
@@ -880,9 +919,6 @@ private fun FullTextSearchPage(
                     Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    TextButton(onClick = onClose) {
-                        Text("‹ 返回", color = palette.fg, fontSize = 14.sp)
-                    }
                     Text(
                         text = "全文搜索",
                         color = palette.fg,
@@ -927,7 +963,8 @@ private fun FullTextSearchPage(
                         kw.isBlank() -> "输入关键字，全书范围检索（已缓存直读，其余联网补拉）"
                         scanning -> "正在扫描 " + scanned + "/" + chapters.size +
                             " 章，已命中 " + totalCount + " 次"
-                        else -> "全书命中 " + totalCount + " 次，分布在 " + hits.size + " 章"
+                        else -> "全书命中 " + totalCount + " 次，分布在 " + hits.size + " 章（已扫 " +
+                            scanned + "/" + chapters.size + " 章，失败 " + failed + " 章）"
                     },
                     color = palette.sub,
                     fontSize = 12.sp,
