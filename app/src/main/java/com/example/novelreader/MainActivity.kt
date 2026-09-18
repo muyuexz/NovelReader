@@ -708,33 +708,38 @@ private fun SearchScreen(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background),
     ) {
-        // —— Hero 头部：渐变延伸到状态栏下 ——
+        // —— 第 25 批：Hero 头部重做 ——
+        // 渐变圆角底 + 左侧标题/书源状态 + 一体化搜索胶囊（输入框 + 圆角按钮）
         Column(
             Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(bottomStart = 28.dp, bottomEnd = 28.dp))
+                .clip(RoundedCornerShape(bottomStart = 30.dp, bottomEnd = 30.dp))
                 .background(Brush.linearGradient(Ink.BrandGradient))
                 .windowInsetsPadding(WindowInsets.statusBars)
-                .padding(start = 22.dp, end = 22.dp, top = 22.dp, bottom = 22.dp),
+                .padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 22.dp),
         ) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("发现", style = MaterialTheme.typography.headlineMedium, color = Color.White)
-                Spacer(Modifier.weight(1f))
+            Column(Modifier.fillMaxWidth()) {
+                Text(
+                    "发现",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = Color.White,
+                )
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    text = when {
+                        !sourcesLoaded -> "正在装载书源…"
+                        sourceCount == 0 -> "尚未导入书源 · 去「书源」页添加"
+                        sourceFailed > 0 -> "已载入 $sourceCount 条书源 · $sourceFailed 条解析失败"
+                        else -> "已载入 $sourceCount 条书源 · 全网聚合"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.82f),
+                )
             }
-            Spacer(Modifier.height(5.dp))
-            Text(
-                text = when {
-                    !sourcesLoaded -> "正在装载书源…"
-                    sourceFailed > 0 -> "已载入 $sourceCount 条书源 · $sourceFailed 条解析失败"
-                    else -> "已载入 $sourceCount 条书源 · 全网聚合"
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = Color.White.copy(alpha = 0.85f),
-            )
-            Spacer(Modifier.height(18.dp))
-
+            Spacer(Modifier.height(16.dp))
+            // 搜索胶囊：白底圆角容器包一层，输入区透明、按钮圆角呼应
             Surface(
-                shape = RoundedCornerShape(15.dp),
+                shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.surface,
             ) {
                 Row(
@@ -746,7 +751,7 @@ private fun SearchScreen(
                         onValueChange = onKeywordChange,
                         modifier = Modifier.weight(1f),
                         singleLine = true,
-                        placeholder = { Text("书名 / 作者", style = MaterialTheme.typography.bodyLarge) },
+                        placeholder = { Text("搜书名 / 作者", style = MaterialTheme.typography.bodyLarge) },
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                         keyboardActions = KeyboardActions(onSearch = { onSearch() }),
                         colors = TextFieldDefaults.colors(
@@ -758,43 +763,53 @@ private fun SearchScreen(
                             disabledIndicatorColor = Color.Transparent,
                         ),
                     )
-                    Spacer(Modifier.width(4.dp))
+                    Spacer(Modifier.width(6.dp))
                     Button(
                         onClick = onSearch,
-                        enabled = !searching,
-                        shape = RoundedCornerShape(11.dp),
+                        enabled = !searching && keyword.trim().isNotEmpty(),
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 22.dp, vertical = 12.dp),
                     ) {
                         Text(if (searching) "搜索中" else "搜索")
                     }
                 }
             }
         }
-
         // —— 结果区 ——
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when {
-                hits.isNotEmpty() -> Column(Modifier.fillMaxSize().padding(top = 14.dp)) {
-                    Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                hits.isNotEmpty() -> Column(Modifier.fillMaxSize().padding(top = 12.dp)) {
+                    // 第 25 批：结果工具栏收进一张浅色圆角条，命中数 / 进度 / 排序说明一行排齐
+                    Surface(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
                     ) {
-                        CountBadge("命中 ${hits.size} 条")
-                        Spacer(Modifier.width(10.dp))
-                        if (searching) {
-                            CircularProgressIndicator(modifier = Modifier.size(13.dp), strokeWidth = 1.5.dp)
-                            Spacer(Modifier.width(6.dp))
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            CountBadge("命中 ${hits.size} 条")
+                            if (searching) {
+                                Spacer(Modifier.width(10.dp))
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(13.dp),
+                                    strokeWidth = 1.5.dp,
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    "搜索中…",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Spacer(Modifier.weight(1f))
                             Text(
-                                "搜索中…",
-                                style = MaterialTheme.typography.bodySmall,
+                                "已过滤无关",
+                                style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                        Spacer(Modifier.weight(1f))
-                        Text(
-                            "已过滤无关 · 按匹配度排序",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
                     }
                     Spacer(Modifier.height(10.dp))
                     LazyColumn(
@@ -820,12 +835,19 @@ private fun SearchScreen(
                     description = "已向 $sourceCount 条书源发出请求…",
                     spinner = true,
                 )
-
+                !sourcesLoaded -> StateBlock(
+                    title = "正在装载书源",
+                    description = "稍等一下下…",
+                    spinner = true,
+                )
+                sourceCount == 0 -> StateBlock(
+                    title = "还没有书源",
+                    description = "内置书源已移除。切到「书源」页，用右上角 \u22ee 的本地/网络导入你的书源",
+                )
                 !hasSearched -> StateBlock(
                     title = "开始探索",
                     description = "输入书名或作者，一键搜遍全部书源",
                 )
-
                 else -> StateBlock(
                     title = "没有找到结果",
                     description = "已自动过滤无关结果；换更准确的书名或作者试试",

@@ -107,7 +107,7 @@ fun SourceManagerScreen(
         AppHeader(
             title = "书源管理",
             subtitle = "共 ${sources.size} 条 · 启用 ${sources.count { it.enabled }} 条",
-            onBack = onBack,
+            // 第25批：按需求去掉左上角返回按钮（改由系统返回键 / 底部导航离开）。
             trailing = {
                 Box {
                     Text(

@@ -214,22 +214,24 @@ fun CoverThumb(coverUrl: String?, name: String, modifier: Modifier = Modifier) {
 fun BookCard(book: Book, onClick: () -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(18.dp),
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        shadowElevation = 1.dp,
     ) {
         Row(
             modifier = Modifier
                 .clickable(onClick = onClick)
-                .padding(12.dp),
-            verticalAlignment = Alignment.Top,
+                .padding(start = 12.dp, end = 14.dp, top = 12.dp, bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             CoverThumb(book.coverUrl, book.name.ifBlank { "书" })
-            Spacer(Modifier.width(13.dp))
+            Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Text(
                     text = book.name.ifBlank { "（无书名）" },
                     style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -266,6 +268,12 @@ fun BookCard(book: Book, onClick: () -> Unit) {
                     TagPill(book.originName)
                 }
             }
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "\u203a",
+                fontSize = 22.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

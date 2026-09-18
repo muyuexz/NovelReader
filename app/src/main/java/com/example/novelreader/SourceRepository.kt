@@ -14,24 +14,19 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
-import java.io.File
 
 /**
  * 书源仓库：负责把书源 JSON 装进内存，并把「关键词搜索」分发到多条书源上并发执行。
  *
  * 设计要点（对齐 Legado 的 SearchModel 分发层）：
- * - 书源优先从 `/sdcard/NovelReader-apk/src1264.json` 读取（真实回归测试集），
- *   读不到再回落到 `assets/booksources.json`，保证离线也能跑。
+ * - 第25批：内置书源整条通路下线。assets 打包源与外部回归测试集全部拆除，
+ *   App 初始零书源，一切书源由用户在「书源管理」导入后持久化到外部私有快照。
  * - 搜索按「限流并发 + 单源超时」执行，任一源炸掉只丢它自己的结果，不拖垮整批。
  * - 结果边出边回调，UI 可以做「流式」呈现，不必等 1264 条全部跑完。
  */
 object SourceRepository {
 
-    /** 打包进 assets 的书源文件名。 */
-    const val ASSET_NAME = "booksources.json"
-
-    /** 外部回归测试集路径。 */
-    private const val EXTERNAL_SOURCES = "/sdcard/NovelReader-apk/src1264.json"
+    // 第25批：内置书源常量与回落链路已整体移除，App 不再携带任何预置书源。
     /** 第21批：用户在「书源管理」里导入/编辑后的快照文件名（App 专属外部目录，免权限）。 */
     private const val IMPORTED_NAME = "booksources_imported.json"
 
@@ -80,22 +75,10 @@ object SourceRepository {
                 return imported.readText()
             }
         }
-        // 1) 外部回归测试集（在 scoped storage 下需存储权限；读不到就静默跳过）
-        runCatching {
-            val external = File(EXTERNAL_SOURCES)
-            if (external.exists() && external.length() > 0L) return external.readText()
-        }
-        // 2) App 专属外部目录：免权限，方便热替换书源而无需重新打包
-        runCatching {
-            val appExternal = context.getExternalFilesDir(null)?.resolve(ASSET_NAME)
-            if (appExternal != null && appExternal.exists() && appExternal.length() > 0L) {
-                return appExternal.readText()
-            }
-        }
-        // 3) 兜底：打包进 assets 的默认书源
-        return runCatching {
-            context.assets.open(ASSET_NAME).bufferedReader().use { it.readText() }
-        }.getOrNull()
+        // 1) 第25批：内置书源通路全部拆除——外部回归测试集、App 专属外部目录、
+        //    assets 打包源三条路径都不再装载。App 初始零书源，
+        //    一切书源都由用户在「书源管理」里导入，并落盘为下面的快照。
+        return null
     }
 
     /**

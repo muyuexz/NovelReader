@@ -8,7 +8,7 @@ import kotlinx.serialization.json.decodeFromJsonElement
 /**
  * 书源实体（同构复刻 Legado `io.legado.app.data.entities.BookSource` 的规则相关字段）。
  *
- * 字段名与 Legado 导出的 JSON 键完全一致，便于直接吃下 `src1264.json` 这类真实书源包。
+ * 字段名与 Legado 导出的 JSON 键完全一致，便于直接吃下用户在「书源管理」里导入的真实书源包。
  * 解析采用宽松策略（`ignoreUnknownKeys` + `coerceInputValues` + 逐条容错），
  * 以适配真实世界里参差不齐的书源数据。
  */
