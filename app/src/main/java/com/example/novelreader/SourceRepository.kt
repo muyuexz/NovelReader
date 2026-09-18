@@ -109,7 +109,7 @@ object SourceRepository {
                     sem.withPermit {
                         val hits = runCatching {
                             withTimeout(perSourceTimeoutMs) { BookSourceEngine.search(src, key) }
-                        }.getOrDefault(emptyList())
+                        }.getOrDefault(emptyList()).filter { isRelevant(it, key) }
                         if (hits.isNotEmpty()) {
                             // 累积 + 全量重排：回调的是「当前已命中的有序快照」，
                             // 不是增量批次。UI 直接整体替换即可，列表不会因到达顺序而抖。
@@ -179,6 +179,44 @@ object SourceRepository {
     /** 关键词命中作者名时给 0（优先），否则 1。 */
     private fun authorHit(book: Book, key: String): Int =
         if (key.isNotEmpty() && normalize(book.author).contains(key)) 0 else 1
+
+    /**
+     * 相关性命中判定：书名或作者里**必须**命中关键词，才允许进入结果列表。
+     *
+     * 目的：不少书源搜不到时会把「整站书库 / 分类页」原样吐回来，或按正文、简介里
+     * 擦到的一个字硬凑结果——这些在 [rankByRelevance] 里只会被丢进第 3 档垫底。
+     * 与其让用户在噪声里翻，不如在入库前直接剔掉，列表里只留「比较准的」。
+     *
+     * 关键词按空白 / 标点切成 token（顺带兼容「书名 作者」这类多词查询），
+     * 任一 token 命中书名或作者即算相关。归一化后为空（纯符号）时不设门槛。
+     */
+    private fun isRelevant(book: Book, key: String): Boolean {
+        val ts = tokens(key)
+        if (ts.isEmpty()) return true
+        val n = normalize(book.name)
+        val a = normalize(book.author)
+        return ts.any { n.contains(it) || a.contains(it) }
+    }
+
+    /** 把查询词切成归一化 token：全角转半角后，非字母数字一律当分隔符。 */
+    private fun tokens(key: String): List<String> {
+        val out = ArrayList<String>()
+        val sb = StringBuilder()
+        for (ch in key) {
+            var c = ch
+            if (c.code in 0xFF01..0xFF5E) c = (c.code - 0xFEE0).toChar()
+            if (c == '\u3000') c = ' '
+            val lower = c.lowercaseChar()
+            if (lower.isLetterOrDigit()) {
+                sb.append(lower)
+            } else if (sb.isNotEmpty()) {
+                out.add(sb.toString())
+                sb.clear()
+            }
+        }
+        if (sb.isNotEmpty()) out.add(sb.toString())
+        return out
+    }
 
     /**
      * 匹配用归一化：全角 → 半角，只保留字母 / 数字 / 汉字，统一小写。

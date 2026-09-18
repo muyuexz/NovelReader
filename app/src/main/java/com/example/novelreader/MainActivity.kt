@@ -699,7 +699,7 @@ private fun SearchScreen(
                         }
                         Spacer(Modifier.weight(1f))
                         Text(
-                            "按匹配度排序",
+                            "已过滤无关 · 按匹配度排序",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -730,7 +730,7 @@ private fun SearchScreen(
 
                 else -> StateBlock(
                     title = "没有找到结果",
-                    description = "换个关键词试试，或稍后重试",
+                    description = "已自动过滤无关结果；换更准确的书名或作者试试",
                     actionText = "重新搜索",
                     onAction = onSearch,
                 )
