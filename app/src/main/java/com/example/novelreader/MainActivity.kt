@@ -273,7 +273,13 @@ private fun NovelApp(
                 val c = list[i]
                 if (!contentCache.containsKey(c.url) && prefetching.add(c.url)) {
                     val t = runCatching { BookSourceEngine.getContent(src, b, c) }.getOrDefault("")
-                    if (t.isNotBlank()) contentCache[c.url] = t else prefetching.remove(c.url)
+                    if (t.isNotBlank()) {
+                        contentCache[c.url] = t
+                        // 第37批：预取正文同步落盘，退出重进不再重下。
+                        ChapterDiskCache.put(context, c.url, t)
+                    } else {
+                        prefetching.remove(c.url)
+                    }
                     fetched++
                 }
                 i++
@@ -310,17 +316,30 @@ private fun NovelApp(
                 withContext(Dispatchers.Main) { refreshShelf() }
             }
             if (cached == null) {
-                val txt = withContext(Dispatchers.IO) {
-                    runCatching { BookSourceEngine.getContent(src, b, ch) }.getOrDefault("")
-                }
-                if (txt.isNotBlank()) {
-                    contentCache[ch.url] = txt
+                // 第37批：内存未命中 -> 先查磁盘缓存，命中即秒开、彻底免网络。
+                val fromDisk = withContext(Dispatchers.IO) { ChapterDiskCache.get(context, ch.url) }
+                if (fromDisk != null) {
+                    contentCache[ch.url] = fromDisk
                     withContext(Dispatchers.Main) { cacheTick++ }
-                }
-                // 快速连点翻章时，只有仍是最新选中的章节才允许回填，避免串台。
-                if (currentChapter === ch) {
-                    content = txt.ifBlank { "（正文解析为空：书源规则不匹配或网络失败）" }
-                    loadingContent = false
+                    if (currentChapter === ch) {
+                        content = fromDisk
+                        loadingContent = false
+                    }
+                } else {
+                    val txt = withContext(Dispatchers.IO) {
+                        runCatching { BookSourceEngine.getContent(src, b, ch) }.getOrDefault("")
+                    }
+                    if (txt.isNotBlank()) {
+                        contentCache[ch.url] = txt
+                        // 第37批：正文落盘，退出重进仍在。
+                        withContext(Dispatchers.IO) { ChapterDiskCache.put(context, ch.url, txt) }
+                        withContext(Dispatchers.Main) { cacheTick++ }
+                    }
+                    // 快速连点翻章时，只有仍是最新选中的章节才允许回填，避免串台。
+                    if (currentChapter === ch) {
+                        content = txt.ifBlank { "（正文解析为空：书源规则不匹配或网络失败）" }
+                        loadingContent = false
+                    }
                 }
             }
             // 正文稳了就把后面几章也拉进缓存，翻页不再等网络。
@@ -354,6 +373,8 @@ private fun NovelApp(
                                 .getOrDefault("")
                             if (t.isNotBlank()) {
                                 contentCache[c.url] = t
+                                // 第37批：离线缓存正文同步落盘；否则退出即失、白下一场。
+                                ChapterDiskCache.put(context, c.url, t)
                                 // 每成功一章立刻 +1，目录页「已缓存」标签实时递增。
                                 withContext(Dispatchers.Main) { cacheTick++ }
                             } else {

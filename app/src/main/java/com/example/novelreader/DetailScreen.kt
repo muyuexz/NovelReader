@@ -25,6 +25,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -41,7 +42,7 @@ import com.example.novelreader.analyzeRule.BookChapter
 import com.example.novelreader.analyzeRule.ChapterStats
 import com.example.novelreader.ui.AppHeader
 import com.example.novelreader.ui.TagPill
-import coil.compose.SubcomposeAsyncImage
+import coil.compose.AsyncImage
 import kotlin.math.abs
 
 /* ==================================================================== *
@@ -313,17 +314,21 @@ private fun BigCover(coverUrl: String?, name: String) {
     val frame = Modifier
         .size(width = 92.dp, height = 124.dp)
         .clip(RoundedCornerShape(14.dp))
-    if (!coverUrl.isNullOrBlank()) {
-        SubcomposeAsyncImage(
-            model = coverUrl,
-            contentDescription = name,
-            modifier = frame,
-            contentScale = ContentScale.Crop,
-            loading = { CoverFallback(initial, shade) },
-            error = { CoverFallback(initial, shade) },
-        )
-    } else {
+    if (coverUrl.isNullOrBlank()) {
         CoverFallback(initial, shade, frame)
+    } else {
+        // 第37批：同 Components.kt，改扁平 AsyncImage，避免 subcomposition。
+        val ok = remember(coverUrl) { mutableStateOf(true) }
+        Box(frame) {
+            if (ok.value) CoverFallback(initial, shade)
+            AsyncImage(
+                model = coverUrl,
+                contentDescription = name,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+                onSuccess = { ok.value = false },
+            )
+        }
     }
 }
 

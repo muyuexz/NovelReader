@@ -24,6 +24,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,7 +38,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.novelreader.analyzeRule.Book
-import coil.compose.SubcomposeAsyncImage
+import coil.compose.AsyncImage
 import kotlin.math.abs
 
 /* ------------------------------------------------------------------ *
@@ -199,14 +200,19 @@ fun CoverThumb(coverUrl: String?, name: String, modifier: Modifier = Modifier) {
     if (coverUrl.isNullOrBlank()) {
         CoverBadgeInner(label, frame)
     } else {
-        SubcomposeAsyncImage(
-            model = coverUrl,
-            contentDescription = label,
-            modifier = frame,
-            contentScale = ContentScale.Crop,
-            loading = { CoverBadgeInner(label) },
-            error = { CoverBadgeInner(label) },
-        )
+        // 第37批：SubcomposeAsyncImage -> AsyncImage，去掉每图一个 subcomposition slot 的开销。
+        // 加载中 / 失败时仍回落首字渐变占位。
+        val ok = remember(coverUrl) { mutableStateOf(true) }
+        Box(frame) {
+            if (ok.value) CoverBadgeInner(label)
+            AsyncImage(
+                model = coverUrl,
+                contentDescription = label,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+                onSuccess = { ok.value = false },
+            )
+        }
     }
 }
 
