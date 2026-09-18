@@ -1,0 +1,3 @@
+# NovelReader
+
+Kotlin + Jetpack Compose
