@@ -8,7 +8,6 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,12 +29,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -46,7 +43,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -57,7 +53,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -73,7 +68,6 @@ import com.example.novelreader.ui.Ink
 import com.example.novelreader.ui.NovelReaderTheme
 import com.example.novelreader.ui.ReaderPalettes
 import com.example.novelreader.ui.StateBlock
-import com.example.novelreader.ui.Stepper
 import com.example.novelreader.ui.TagPill
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -134,6 +128,20 @@ private fun NovelApp() {
     // 记录最近阅读的章节，返回目录时可高亮
     var lastChapterUrl by remember { mutableStateOf<String?>(null) }
 
+    // 书架 / 详情页
+    var showShelf by remember { mutableStateOf(false) }
+    var showDetail by remember { mutableStateOf(false) }
+    var detailBook by remember { mutableStateOf<Book?>(null) }
+    var shelfEntries by remember { mutableStateOf(listOf<ShelfEntry>()) }
+
+    val refreshShelf: () -> Unit = {
+        scope.launch {
+            shelfEntries = withContext(Dispatchers.IO) {
+                runCatching { ShelfRepository.all(context) }.getOrDefault(emptyList())
+            }
+        }
+    }
+
     LaunchedEffect(Unit) {
         val info = withContext(Dispatchers.IO) {
             SourceRepository.ensureLoaded(context)
@@ -142,6 +150,9 @@ private fun NovelApp() {
         sourceCount = info.first
         sourceFailed = info.second
         sourcesLoaded = true
+        shelfEntries = withContext(Dispatchers.IO) {
+            runCatching { ShelfRepository.all(context) }.getOrDefault(emptyList())
+        }
     }
 
     // 打开某本书 → 拉取目录
@@ -162,6 +173,13 @@ private fun NovelApp() {
             chapters = list
             if (list.isEmpty()) tocError = "目录解析为空（书源规则不匹配或网络失败）"
             loadingToc = false
+            // 详情拿到了就顺手刷进书架（不在书架里则无操作）
+            val src = book.source
+            if (src != null) {
+                withContext(Dispatchers.IO) {
+                    runCatching { ShelfRepository.refreshMeta(context, book, src.bookSourceUrl) }
+                }
+            }
         }
     }
 
@@ -175,6 +193,8 @@ private fun NovelApp() {
         loadingContent = true
         scope.launch {
             val txt = withContext(Dispatchers.IO) {
+                // 阅读进度写进书架（不在书架里则无操作）
+                runCatching { ShelfRepository.updateProgress(context, b.bookUrl, src.bookSourceUrl, ch) }
                 runCatching { BookSourceEngine.getContent(src, b, ch) }.getOrDefault("")
             }
             // 快速连点翻章时，只有仍是最新选中的章节才允许回填，避免串台。
@@ -187,6 +207,61 @@ private fun NovelApp() {
 
     val openBookNow = currentBook
     val openChapter = currentChapter
+
+    // —— 详情页 / 书架派生状态 ——
+    val detailNow = detailBook
+    val detailSourceUrl = detailNow?.source?.bookSourceUrl ?: ""
+    val shelfEntryNow = detailNow?.let { b ->
+        shelfEntries.firstOrNull { it.bookUrl == b.bookUrl && it.sourceUrl == detailSourceUrl }
+    }
+    val inShelf = shelfEntryNow != null
+    val continueChapter = chapters.firstOrNull { it.url == shelfEntryNow?.lastReadChapterUrl }
+        ?: chapters.firstOrNull()
+    val onContinue: (() -> Unit)? = if (inShelf && continueChapter != null) {
+        { loadChapter(continueChapter) }
+    } else null
+    val onToggleShelf: () -> Unit = {
+        val b = detailNow
+        if (b != null && detailSourceUrl.isNotBlank()) {
+            if (inShelf) ShelfRepository.removeBy(context, b.bookUrl, detailSourceUrl)
+            else ShelfRepository.add(context, b, detailSourceUrl)
+            refreshShelf()
+        }
+    }
+
+    // 搜索卡片 → 详情页（目录照旧在后台拉，详情页上能直接看到章节数）
+    val openDetail: (Book) -> Unit = { book ->
+        detailBook = book
+        showDetail = true
+        openBook(book)
+    }
+
+    // 书架条目 → 还原成 Book 并直接续读到上次那一章
+    val openFromShelf: (Book, ShelfEntry) -> Unit = { book, entry ->
+        detailBook = book
+        showDetail = false
+        currentBook = book
+        chapters = emptyList()
+        tocError = null
+        lastChapterUrl = entry.lastReadChapterUrl
+        loadingToc = true
+        scope.launch {
+            val list = withContext(Dispatchers.IO) {
+                val src = book.source
+                if (src == null) emptyList<BookChapter>() else runCatching {
+                    BookSourceEngine.getBookInfo(src, book)
+                    BookSourceEngine.getChapterList(src, book)
+                }.getOrDefault(emptyList())
+            }
+            chapters = list
+            loadingToc = false
+            if (list.isEmpty()) {
+                tocError = "目录解析为空（书源规则不匹配或网络失败）"
+            } else {
+                loadChapter(list.firstOrNull { it.url == entry.lastReadChapterUrl } ?: list.first())
+            }
+        }
+    }
 
     when {
         openBookNow != null && openChapter != null -> ReaderScreen(
@@ -201,6 +276,25 @@ private fun NovelApp() {
             },
         )
 
+        openBookNow != null && showDetail -> DetailScreen(
+            book = openBookNow,
+            chapters = chapters,
+            loading = loadingToc,
+            error = tocError,
+            inShelf = inShelf,
+            onBack = {
+                showDetail = false
+                detailBook = null
+                currentBook = null
+                chapters = emptyList()
+                tocError = null
+            },
+            onToggleShelf = onToggleShelf,
+            onRead = { showDetail = false },
+            onContinue = onContinue,
+            onRetry = { openBook(openBookNow) },
+        )
+
         openBookNow != null -> TocScreen(
             book = openBookNow,
             chapters = chapters,
@@ -208,11 +302,35 @@ private fun NovelApp() {
             loading = loadingToc,
             error = tocError,
             onBack = {
-                currentBook = null
-                chapters = emptyList()
-                tocError = null
+                if (detailBook != null) {
+                    showDetail = true
+                } else {
+                    currentBook = null
+                    chapters = emptyList()
+                    tocError = null
+                }
             },
             onOpen = { ch -> loadChapter(ch) },
+        )
+
+        showShelf -> ShelfScreen(
+            entries = shelfEntries,
+            onBack = { showShelf = false },
+            onOpen = { entry ->
+                showShelf = false
+                openDetail(entry.toBook(SourceRepository.findByKey(entry.sourceUrl)))
+            },
+            onRead = { entry ->
+                showShelf = false
+                openFromShelf(
+                    entry.toBook(SourceRepository.findByKey(entry.sourceUrl)),
+                    entry,
+                )
+            },
+            onRemove = { entry ->
+                ShelfRepository.removeBy(context, entry.bookUrl, entry.sourceUrl)
+                refreshShelf()
+            },
         )
 
         else -> SearchScreen(
@@ -237,7 +355,11 @@ private fun NovelApp() {
                     }
                 }
             },
-            onOpen = openBook,
+            onOpen = openDetail,
+            onOpenShelf = {
+                refreshShelf()
+                showShelf = true
+            },
         )
     }
 }
@@ -257,6 +379,7 @@ private fun SearchScreen(
     sourcesLoaded: Boolean,
     onSearch: () -> Unit,
     onOpen: (Book) -> Unit,
+    onOpenShelf: () -> Unit,
 ) {
     Column(
         Modifier
@@ -273,7 +396,13 @@ private fun SearchScreen(
                 .windowInsetsPadding(WindowInsets.statusBars)
                 .padding(start = 22.dp, end = 22.dp, top = 22.dp, bottom = 22.dp),
         ) {
-            Text("轻阅读", style = MaterialTheme.typography.headlineMedium, color = Color.White)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("轻阅读", style = MaterialTheme.typography.headlineMedium, color = Color.White)
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = onOpenShelf) {
+                    Text("我的书架", color = Color.White, style = MaterialTheme.typography.labelLarge)
+                }
+            }
             Spacer(Modifier.height(5.dp))
             Text(
                 text = when {
@@ -511,230 +640,6 @@ private fun ChapterRow(
         if (chapter.isVip || chapter.isPay) {
             Spacer(Modifier.width(8.dp))
             TagPill(if (chapter.isPay) "付费" else "VIP")
-        }
-    }
-}
-
-/* ==================================================================== *
- *  阅读页：5 套底色 + 沉浸式点击隐藏栏 + 字号/行距/底色设置
- * ==================================================================== */
-@Composable
-private fun ReaderScreen(
-    chapter: BookChapter,
-    content: String,
-    loading: Boolean,
-    chapters: List<BookChapter>,
-    onOpenChapter: (BookChapter) -> Unit,
-    onBack: () -> Unit,
-) {
-    val context = LocalContext.current
-    val prefs = remember {
-        context.getSharedPreferences("reader_prefs", android.content.Context.MODE_PRIVATE)
-    }
-    var fontSize by remember { mutableStateOf(prefs.getInt("fontSize", 17)) }
-    var lineHeight by remember { mutableStateOf(prefs.getInt("lineHeight", 28)) }
-    var paletteId by remember {
-        mutableStateOf(
-            prefs.getString("palette", null)
-                ?: if (prefs.getBoolean("nightMode", false)) "black" else "paper",
-        )
-    }
-    var showPanel by remember { mutableStateOf(false) }
-    var barsVisible by remember { mutableStateOf(true) }
-    val palette = ReaderPalettes.firstOrNull { it.id == paletteId } ?: ReaderPalettes.first()
-
-    val scrollState = rememberScrollState()
-    // 切章后回到顶部
-    LaunchedEffect(chapter.url) { scrollState.scrollTo(0) }
-
-    // 当前章在目录中的位置 → 上一章 / 下一章
-    val idx = remember(chapter.url, chapters) {
-        chapters.indexOfFirst { it.url == chapter.url }
-    }
-    val prev = if (idx > 0) chapters[idx - 1] else null
-    val next = if (idx in 0 until chapters.size - 1) chapters[idx + 1] else null
-    val progress by remember {
-        derivedStateOf {
-            val max = scrollState.maxValue
-            if (max <= 0) 0f else scrollState.value.toFloat() / max.toFloat()
-        }
-    }
-
-    Column(
-        Modifier
-            .fillMaxSize()
-            .background(palette.bg)
-            .windowInsetsPadding(WindowInsets.systemBars),
-    ) {
-        // —— 顶部栏 ——
-        AnimatedVisibility(visible = barsVisible) {
-            Surface(color = palette.panel) {
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    TextButton(onClick = onBack) {
-                        Text("‹ 目录", color = palette.sub, fontSize = 14.sp)
-                    }
-                    Text(
-                        text = chapter.title.ifBlank { "正文" },
-                        modifier = Modifier.weight(1f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        color = palette.fg,
-                        fontSize = 14.sp,
-                    )
-                    Text(
-                        text = if (loading) "--" else "${(progress * 100).toInt()}%",
-                        color = palette.sub,
-                        fontSize = 12.sp,
-                        modifier = Modifier.padding(end = 6.dp),
-                    )
-                    TextButton(onClick = { showPanel = !showPanel }) {
-                        Text("Aa", color = if (showPanel) palette.fg else palette.sub, fontSize = 15.sp)
-                    }
-                }
-            }
-        }
-
-        // —— 正文（点击切换上下栏显隐）——
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            if (loading) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = palette.fg)
-                }
-            } else {
-                Text(
-                    text = content.ifBlank { "（正文为空）" },
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .verticalScroll(scrollState)
-                        .pointerInput(Unit) {
-                            detectTapGestures {
-                                if (barsVisible) showPanel = false
-                                barsVisible = !barsVisible
-                            }
-                        }
-                        .padding(horizontal = 22.dp, vertical = 16.dp),
-                    color = palette.fg,
-                    fontSize = fontSize.sp,
-                    lineHeight = lineHeight.sp,
-                )
-            }
-        }
-
-        // —— 设置面板 + 底部翻章栏 ——
-        AnimatedVisibility(visible = barsVisible) {
-            Column {
-                if (showPanel) {
-                    Surface(color = palette.panel) {
-                        Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp)) {
-                            Stepper(
-                                label = "字号",
-                                valueText = "$fontSize",
-                                canDec = fontSize > 13,
-                                canInc = fontSize < 30,
-                                onDec = {
-                                    fontSize -= 1
-                                    prefs.edit().putInt("fontSize", fontSize).apply()
-                                },
-                                onInc = {
-                                    fontSize += 1
-                                    prefs.edit().putInt("fontSize", fontSize).apply()
-                                },
-                                fg = palette.fg,
-                                sub = palette.sub,
-                            )
-                            Spacer(Modifier.height(4.dp))
-                            Stepper(
-                                label = "行距",
-                                valueText = "$lineHeight",
-                                canDec = lineHeight > 20,
-                                canInc = lineHeight < 48,
-                                onDec = {
-                                    lineHeight -= 1
-                                    prefs.edit().putInt("lineHeight", lineHeight).apply()
-                                },
-                                onInc = {
-                                    lineHeight += 1
-                                    prefs.edit().putInt("lineHeight", lineHeight).apply()
-                                },
-                                fg = palette.fg,
-                                sub = palette.sub,
-                            )
-                            Spacer(Modifier.height(12.dp))
-
-                            // 底色选择：5 套预设
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    "底色",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = palette.fg,
-                                    modifier = Modifier.width(48.dp),
-                                )
-                                ReaderPalettes.forEach { p ->
-                                    val selected = p.id == palette.id
-                                    Box(
-                                        modifier = Modifier
-                                            .padding(end = 12.dp)
-                                            .size(30.dp)
-                                            .clip(CircleShape)
-                                            .background(p.bg)
-                                            .border(
-                                                width = if (selected) 2.dp else 1.dp,
-                                                color = if (selected) palette.fg else palette.divider,
-                                                shape = CircleShape,
-                                            )
-                                            .clickable {
-                                                paletteId = p.id
-                                                prefs.edit()
-                                                    .putString("palette", p.id)
-                                                    .putBoolean("nightMode", p.id == "black")
-                                                    .apply()
-                                            },
-                                    )
-                                }
-                            }
-                            Spacer(Modifier.height(6.dp))
-                        }
-                    }
-                }
-
-                Surface(color = palette.panel) {
-                    Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        TextButton(
-                            onClick = { prev?.let(onOpenChapter) },
-                            enabled = prev != null,
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Text(
-                                "‹ 上一章",
-                                color = if (prev != null) palette.fg else palette.sub,
-                                fontSize = 14.sp,
-                            )
-                        }
-                        Text(
-                            text = if (idx >= 0) "${idx + 1}/${chapters.size}" else "",
-                            color = palette.sub,
-                            fontSize = 12.sp,
-                        )
-                        TextButton(
-                            onClick = { next?.let(onOpenChapter) },
-                            enabled = next != null,
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Text(
-                                "下一章 ›",
-                                color = if (next != null) palette.fg else palette.sub,
-                                fontSize = 14.sp,
-                            )
-                        }
-                    }
-                }
-            }
         }
     }
 }

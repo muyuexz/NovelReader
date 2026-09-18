@@ -60,8 +60,12 @@ object SourceRepository {
     }
 
     fun all(): List<BookSource> = sources
-
     fun enabled(): List<BookSource> = sources.filter { it.enabled }
+
+    /** 按书源地址反查书源：书架把快照还原成可继续阅读的 [Book] 时要用。 */
+    fun findByKey(bookSourceUrl: String): BookSource? =
+        if (bookSourceUrl.isBlank()) null
+        else sources.firstOrNull { it.bookSourceUrl == bookSourceUrl }
 
     private fun readSourceText(context: Context): String? {
         // 1) 外部回归测试集（在 scoped storage 下需存储权限；读不到就静默跳过）
@@ -127,18 +131,25 @@ object SourceRepository {
      * 跨源排序：把「最像用户想找的那本」顶到最前。
      *
      * 排序键（依次比较）：
-     * 1. 书名匹配度：完全相等 → 前缀命中 → 包含命中 → 其它；
-     * 2. 书源权重 `weight` 降序（高权重源的结果更可信）；
-     * 3. 书源自定义序 `customOrder` 升序（用户在源列表里手动排的先后）；
-     * 4. 书名长度升序（短书名更可能是正主，少一堆「XX（全本）TXT下载」）；
-     * 5. 书名字典序，保证同分同序稳定。
+     * 1. 书名匹配档次：完全相等 → 前缀命中 → 包含命中 → 其它；
+     * 2. 命中位置：关键词在书名里出现得越靠前越优（治「XX（大主宰）同人」这类前缀噪声）；
+     * 3. 作者命中：关键词命中了作者名的排在前面（用户按作者搜时救命）；
+     * 4. 书源权重 `weight` 降序（高权重源的结果更可信）；
+     * 5. 书源自定义序 `customOrder` 升序；
+     * 6. 书名长度升序（短书名更可能是正主，少一堆「XX（全本）TXT下载」）；
+     * 7. 书名字典序，保证同分同序稳定。
+     *
+     * 匹配前统一走 [normalize]：全角转半角、去掉空白与标点、统一小写。
+     * 这样《斗破苍穹》、《斗破苍穹！》、"斗破 苍穹" 在「斗破苍穹」下同档，不会自相残杀。
      */
     private fun rankByRelevance(list: List<Book>, key: String): List<Book> {
-        val k = key.trim()
+        val k = normalize(key)
         if (k.isEmpty()) return list
         return list.sortedWith(
             compareBy(
                 { relevance(it.name, k) },
+                { hitPosition(it.name, k) },
+                { authorHit(it, k) },
                 { -(it.source?.weight ?: 0) },
                 { it.source?.customOrder ?: 0 },
                 { it.name.length },
@@ -149,12 +160,40 @@ object SourceRepository {
 
     /** 书名与关键词的匹配档次：0=完全相等，1=前缀，2=包含，3=无关。 */
     private fun relevance(name: String, key: String): Int {
-        val n = name.trim()
+        val n = normalize(name)
+        if (n.isEmpty()) return 3
         return when {
-            n.equals(key, ignoreCase = true) -> 0
-            n.startsWith(key, ignoreCase = true) -> 1
-            n.contains(key, ignoreCase = true) -> 2
+            n == key -> 0
+            n.startsWith(key) -> 1
+            n.contains(key) -> 2
             else -> 3
         }
+    }
+
+    /** 关键词在书名中首次出现的下标；没出现给一个「非常大」的档位。 */
+    private fun hitPosition(name: String, key: String): Int {
+        val i = normalize(name).indexOf(key)
+        return if (i < 0) Int.MAX_VALUE / 2 else i
+    }
+
+    /** 关键词命中作者名时给 0（优先），否则 1。 */
+    private fun authorHit(book: Book, key: String): Int =
+        if (key.isNotEmpty() && normalize(book.author).contains(key)) 0 else 1
+
+    /**
+     * 匹配用归一化：全角 → 半角，只保留字母 / 数字 / 汉字，统一小写。
+     * 标点、空白、书名号一律抹掉，让「《三体》」和「三体」是同一个键。
+     */
+    private fun normalize(s: String): String {
+        val sb = StringBuilder(s.length)
+        for (ch in s) {
+            var c = ch
+            // 全角字符（！-～）映射回半角
+            if (c.code in 0xFF01..0xFF5E) c = (c.code - 0xFEE0).toChar()
+            if (c == '\u3000') c = ' '
+            val lower = c.lowercaseChar()
+            if (lower.isLetterOrDigit()) sb.append(lower)
+        }
+        return sb.toString()
     }
 }
