@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -37,6 +38,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -71,6 +73,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
@@ -637,7 +640,7 @@ private fun highlightText(text: String, keyword: String): AnnotatedString {
         var start = text.indexOf(kw, 0, ignoreCase = true)
         while (start >= 0) {
             append(text.substring(i, start))
-            withStyle(SpanStyle(background = Color(0xFFFFEB3B).copy(alpha = 0.55f))) {
+            withStyle(SpanStyle(color = Color(0xFFE53935), background = Color(0x40E53935))) {
                 append(text.substring(start, start + kw.length))
             }
             i = start + kw.length
@@ -647,6 +650,27 @@ private fun highlightText(text: String, keyword: String): AnnotatedString {
     }
 }
 
+
+/* ------------------------------------------------------------------ *
+ *  第18批：搜索结果里的关键字标红（仅红色前景，便于一眼扫到）。
+ * ------------------------------------------------------------------ */
+private fun keywordRed(text: String, keyword: String): AnnotatedString {
+    val kw = keyword.trim()
+    if (kw.isEmpty() || text.isEmpty()) return AnnotatedString(text)
+    return buildAnnotatedString {
+        var i = 0
+        var start = text.indexOf(kw, 0, ignoreCase = true)
+        while (start >= 0) {
+            append(text.substring(i, start))
+            withStyle(SpanStyle(color = Color(0xFFE53935))) {
+                append(text.substring(start, start + kw.length))
+            }
+            i = start + kw.length
+            start = text.indexOf(kw, i, ignoreCase = true)
+        }
+        append(text.substring(i))
+    }
+}
 
 /* ------------------------------------------------------------------ *
  *  分页核心：把一整章正文按「阅读区实际宽高 + 当前字号行距」切成页
@@ -758,6 +782,10 @@ private fun FullTextSearchPage(
     var scanned by remember { mutableStateOf(0) }
     var totalCount by remember { mutableStateOf(0) }
     var hits by remember { mutableStateOf(emptyList<SearchHit>()) }
+    // 第18批：结果列表滚动状态 + 一键跳首/尾。
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val atBottom = !listState.canScrollForward && hits.isNotEmpty()
 
     val source = book?.source
 
@@ -785,6 +813,8 @@ private fun FullTextSearchPage(
             return@LaunchedEffect
         }
         val found = ArrayList<SearchHit>()
+        // 第18批：结果按章节正序排序用的索引表（章节 url 到书内序号）。
+        val order = list.withIndex().associate { it.value.url to it.index }
         val sem = Semaphore(4)
         var localDone = 0
         var lastShown = 0
@@ -814,7 +844,7 @@ private fun FullTextSearchPage(
                         // 节流：每 16 章才回写一次进度/结果，避免上千次重组。
                         if (localDone - lastShown >= 16 || localDone == total) {
                             lastShown = localDone
-                            val snap = synchronized(found) { found.sortedByDescending { it.count } }
+                            val snap = synchronized(found) { found.sortedBy { order[it.chapter.url] ?: Int.MAX_VALUE } }
                             val d = localDone
                             withContext(Dispatchers.Main) {
                                 scanned = d
@@ -827,7 +857,7 @@ private fun FullTextSearchPage(
             }.awaitAll()
         }
         scanning = false
-        val snap = synchronized(found) { found.sortedByDescending { it.count } }
+        val snap = synchronized(found) { found.sortedBy { order[it.chapter.url] ?: Int.MAX_VALUE } }
         hits = snap
         totalCount = snap.sumOf { it.count }
         scanned = total
@@ -865,6 +895,18 @@ private fun FullTextSearchPage(
                             color = palette.sub,
                             fontSize = 12.sp,
                             modifier = Modifier.padding(end = 10.dp),
+                        )
+                    }
+                    TextButton(onClick = {
+                        scope.launch {
+                            if (atBottom) listState.scrollToItem(0)
+                            else listState.scrollToItem(hits.lastIndex.coerceAtLeast(0))
+                        }
+                    }) {
+                        Text(
+                            text = if (atBottom) "⇧ 开头" else "⇩ 末尾",
+                            color = palette.fg,
+                            fontSize = 13.sp,
                         )
                     }
                 }
@@ -910,7 +952,8 @@ private fun FullTextSearchPage(
                 }
             } else {
                 LazyColumn(
-                    Modifier.fillMaxWidth().weight(1f).padding(horizontal = 14.dp),
+                    state = listState,
+                    modifier = Modifier.fillMaxWidth().weight(1f).padding(horizontal = 14.dp),
                 ) {
                     items(hits, key = { it.chapter.url }) { h ->
                         val c = h.chapter
@@ -925,7 +968,7 @@ private fun FullTextSearchPage(
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Text(
-                                    text = "第 " + (chapters.indexOf(c) + 1) + " 章 " + c.title,
+                                    text = keywordRed("第 " + (chapters.indexOf(c) + 1) + " 章 " + c.title, kw.trim()),
                                     color = palette.fg,
                                     fontSize = 14.sp,
                                     maxLines = 1,
@@ -941,7 +984,7 @@ private fun FullTextSearchPage(
                             if (h.snippet.isNotBlank()) {
                                 Spacer(Modifier.height(2.dp))
                                 Text(
-                                    text = h.snippet,
+                                    text = keywordRed(h.snippet, kw.trim()),
                                     color = palette.sub,
                                     fontSize = 12.sp,
                                     maxLines = 2,
