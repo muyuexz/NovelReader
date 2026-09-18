@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Simple open-book glyph used as the adaptive icon foreground. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group android:translateX="30" android:translateY="30">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M4,2h20a2,2 0 0 1 2,2v36a2,2 0 0 0 -2,-2h-20a2,2 0 0 1 -2,-2v-32a2,2 0 0 1 2,-2z" />
+        <path
+            android:fillColor="#CCFFFFFF"
+            android:pathData="M44,2h-20a2,2 0 0 0 -2,2v36a2,2 0 0 1 2,-2h20a2,2 0 0 0 2,-2v-32a2,2 0 0 0 -2,-2z" />
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M24,4h0.5v36h-0.5z" />
+    </group>
+</vector>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Legacy full-backup rules for API 30 and below.
+-->
+<full-backup-content>
+    <include domain="file" path="." />
+    <include domain="database" path="." />
+    <include domain="sharedpref" path="." />
+    <exclude domain="file" path="cache/" />
+    <exclude domain="file" path="code_cache/" />
+</full-backup-content>

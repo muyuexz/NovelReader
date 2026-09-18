@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Night-mode color overrides. Compose drives the real theme; this keeps the
+     XML window background consistent before Compose attaches. -->
+<resources>
+    <color name="surface_light">#121212</color>
+    <color name="surface_dark">#121212</color>
+    <color name="on_surface_light">#E6E1E5</color>
+    <color name="on_surface_dark">#E6E1E5</color>
+</resources>

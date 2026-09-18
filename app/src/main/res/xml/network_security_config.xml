@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Network security policy.
+
+    Book sources may point at legacy sites that only speak HTTP. To keep user-defined
+    sources functional we enable cleartext traffic globally (base-config), matching the
+    `android:usesCleartextTraffic="true"` flag in AndroidManifest.xml.
+
+    For a production release where every source is known to be HTTPS, set
+    cleartextTrafficPermitted="false" and list only the domains that still need HTTP
+    inside a <domain-config> block.
+-->
+<network-security-config>
+
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!--
+    Example of locking a specific host to HTTPS only:
+
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">example.com</domain>
+    </domain-config>
+    -->
+
+</network-security-config>
