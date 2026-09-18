@@ -138,6 +138,10 @@ private fun NovelApp() {
     val prefetching = remember {
         java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
     }
+    // 第9批：contentCache 是 ConcurrentHashMap，写入不触发 Compose 重组，
+    // 目录页「已缓存」标签要滑动一次才刷新。这里用一个版本号状态承接变更，
+    // 缓存一变就 +1，目录页据此重算 cachedUrls。
+    var cacheTick by remember { mutableStateOf(0) }
 
     // 首页 Tab（0 = 书架，1 = 发现/搜索）/ 详情页
     var homeTab by remember { mutableStateOf(0) }
@@ -220,6 +224,8 @@ private fun NovelApp() {
                 }
                 i++
             }
+            // 第9批：预取写入后通知 UI 刷新缓存标签
+            withContext(Dispatchers.Main) { cacheTick++ }
         }
     }
 
@@ -247,7 +253,10 @@ private fun NovelApp() {
                 val txt = withContext(Dispatchers.IO) {
                     runCatching { BookSourceEngine.getContent(src, b, ch) }.getOrDefault("")
                 }
-                if (txt.isNotBlank()) contentCache[ch.url] = txt
+                if (txt.isNotBlank()) {
+                    contentCache[ch.url] = txt
+                    withContext(Dispatchers.Main) { cacheTick++ }
+                }
                 // 快速连点翻章时，只有仍是最新选中的章节才允许回填，避免串台。
                 if (currentChapter === ch) {
                     content = txt.ifBlank { "（正文解析为空：书源规则不匹配或网络失败）" }
@@ -276,6 +285,8 @@ private fun NovelApp() {
                     if (t.isNotBlank()) contentCache[c.url] = t else prefetching.remove(c.url)
                 }
             }
+            // 第9批：整段区间缓存完，通知 UI 刷新目录页缓存标签
+            withContext(Dispatchers.Main) { cacheTick++ }
         }
     }
     val openBookNow = currentBook
@@ -400,7 +411,7 @@ private fun NovelApp() {
                 showReaderToc = false
                 loadChapter(ch)
             },
-            cachedUrls = contentCache.keys,
+            cachedUrls = remember(cacheTick) { contentCache.keys.toSet() },
         )
 
         openBookNow != null && showDetail -> DetailScreen(
@@ -437,7 +448,7 @@ private fun NovelApp() {
                 }
             },
             onOpen = { ch -> loadChapter(ch) },
-            cachedUrls = contentCache.keys,
+            cachedUrls = remember(cacheTick) { contentCache.keys.toSet() },
         )
 
         // —— 首页：底部 Tab（书架 / 发现），不再有多余的返回入口 ——

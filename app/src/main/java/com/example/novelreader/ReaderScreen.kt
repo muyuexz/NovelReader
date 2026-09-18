@@ -102,6 +102,13 @@ fun ReaderScreen(
     var showSearch by remember { mutableStateOf(false) }
     var cacheFrom by remember { mutableStateOf("") }
     var cacheTo by remember { mutableStateOf("") }
+    // 第9批：打开离线缓存弹窗时，默认把范围填成「第一章 ~ 最后一章」。
+    LaunchedEffect(showCacheDialog, chapters.size) {
+        if (showCacheDialog && chapters.isNotEmpty()) {
+            if (cacheFrom.isBlank()) cacheFrom = "1"
+            if (cacheTo.isBlank()) cacheTo = chapters.size.toString()
+        }
+    }
     var searchKeyword by remember { mutableStateOf("") }
     val palette = ReaderPalettes.firstOrNull { it.id == paletteId } ?: ReaderPalettes.first()
 
@@ -122,14 +129,22 @@ fun ReaderScreen(
     // 第8批：navLock 如果随 chapter.url 重建，换章瞬间会被重置为 false，
     // 导致边界效应在「旧分页 + 新章」的组合下重复触发，一次连跳多章。
     var navLock by remember { mutableStateOf(false) }
+    // 第9批：记录「往右划回到上一章」这次换章的目标章 url。归位时若命中，
+    // 就落到该章最后一页而不是第一页，这才是正常的「往前翻」体验。
+    var enterEndChapter by remember { mutableStateOf<String?>() }
 
     val pagerState = rememberPagerState(pageCount = { pageItems.size.coerceAtLeast(1) })
 
-    // 换章后回到正文第 1 页（第 0 页是「上一章」占位）
+    // 换章后归位：普通入口回到正文第 1 页（第 0 页是「上一章」占位）；
+    // 若是「往右划回到上一章」触发的换章，则落到该章最后一页（末页是「下一章」占位）。
     LaunchedEffect(chapter.url, pagesChapter) {
         if (pagesChapter == chapter.url && pageItems.size > 1) {
-            runCatching { pagerState.scrollToPage(1) }
-            // 第8批：确认已回到本正文首页，才解除换章锁
+            val endPage = (pageItems.size - 2).coerceAtLeast(1)
+            val target = if (enterEndChapter == chapter.url) endPage else 1
+            runCatching { pagerState.scrollToPage(target) }
+            // 第9批：末尾进入的意图只消费一次，不影响后续换章。
+            enterEndChapter = null
+            // 第8批：确认已回到本正文页，才解除换章锁
             navLock = false
         }
     }
@@ -213,7 +228,7 @@ fun ReaderScreen(
                         if (navLock) return@LaunchedEffect
                         if (pageItems.size < 3) return@LaunchedEffect
                         when (pagerState.currentPage) {
-                            0 -> prev?.let { navLock = true; onOpenChapter(it) }
+                            0 -> prev?.let { navLock = true; enterEndChapter = it.url; onOpenChapter(it) }
                             pageItems.lastIndex -> next?.let { navLock = true; onOpenChapter(it) }
                         }
                     }
