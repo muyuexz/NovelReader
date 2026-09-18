@@ -149,13 +149,7 @@ fun ReaderScreen(
                         fontSize = 12.sp,
                         modifier = Modifier.padding(end = 6.dp),
                     )
-                    TextButton(onClick = { showPanel = !showPanel }) {
-                        Text("Aa", color = if (showPanel) palette.fg else palette.sub, fontSize = 15.sp)
-                    }
-                    // 第 3 条：目录入口挪到右上角
-                    TextButton(onClick = onOpenToc) {
-                        Text("目录", color = palette.sub, fontSize = 14.sp)
-                    }
+                    // 第 7 条：「目录」「Aa」已下沉到页面最底部，顶栏只留标题与进度
                 }
             }
         }
@@ -356,6 +350,7 @@ fun ReaderScreen(
                 }
 
                 Surface(color = palette.panel) {
+                    Column(Modifier.fillMaxWidth()) {
                     Row(
                         Modifier.fillMaxWidth().padding(horizontal = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -392,10 +387,28 @@ fun ReaderScreen(
                             )
                         }
                     }
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TextButton(
+                            onClick = { showPanel = !showPanel },
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text("Aa", color = palette.fg, fontSize = 15.sp)
+                        }
+                        TextButton(
+                            onClick = onOpenToc,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text("目录", color = palette.fg, fontSize = 14.sp)
+                        }
+                    }
                 }
             }
         }
     }
+}
 }
 
 /* ------------------------------------------------------------------ *

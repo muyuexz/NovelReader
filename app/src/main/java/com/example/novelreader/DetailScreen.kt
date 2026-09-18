@@ -56,7 +56,6 @@ fun DetailScreen(
     inShelf: Boolean,
     onToggleShelf: () -> Unit,
     onRead: () -> Unit,
-    onContinue: (() -> Unit)?,
     onRetry: () -> Unit,
 ) {
     val scroll = rememberScrollState()
@@ -82,7 +81,7 @@ fun DetailScreen(
         else -> "—"
     }
     val wordText = formatWordCount(book.wordCount)
-    val statusText = book.status?.takeIf { it.isNotBlank() } ?: "未知"
+    val statusText = book.status?.takeIf { it.isNotBlank() } ?: inferStatus(book.kind, intro)
     val updateText = remember(chapters) {
         formatTime(chapters.mapNotNull { it.updateTime }.maxOrNull())
     }
@@ -157,7 +156,7 @@ fun DetailScreen(
             ) {
                 Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp)) {
                     InfoRow("来源", book.originName.takeIf { it.isNotBlank() } ?: "未知")
-                    InfoRow("分类", kinds.joinToString("·").takeIf { it.isNotBlank() } ?: "未分组")
+                    InfoRow("类型", kinds.joinToString("·").takeIf { it.isNotBlank() } ?: "未知")
                     InfoRow("状态", statusText)
                     InfoRow("最新章节", lastChapter ?: "未知")
                     chapters.firstOrNull()?.title?.takeIf { it.isNotBlank() }?.let {
@@ -166,26 +165,23 @@ fun DetailScreen(
                 }
             }
 
-            // —— 操作区 ——
+            // —— 操作区（第 4/5 条）：底部左「加入书架」，右「阅读」；不再单列「查看目录」——
             Spacer(Modifier.height(16.dp))
             Row {
-                OutlinedButton(onClick = onToggleShelf, modifier = Modifier.weight(1f)) {
+                OutlinedButton(
+                    onClick = onToggleShelf,
+                    modifier = Modifier.weight(1f).height(46.dp),
+                ) {
                     Text(if (inShelf) "移出书架" else "加入书架")
                 }
-                if (onContinue != null) {
-                    Spacer(Modifier.width(10.dp))
-                    OutlinedButton(onClick = onContinue, modifier = Modifier.weight(1f)) {
-                        Text("继续阅读")
-                    }
+                Spacer(Modifier.width(10.dp))
+                Button(
+                    onClick = onRead,
+                    modifier = Modifier.weight(1f).height(46.dp),
+                    enabled = chapters.isNotEmpty(),
+                ) {
+                    Text(if (chapters.isEmpty()) "目录加载中" else "阅读")
                 }
-            }
-            Spacer(Modifier.height(10.dp))
-            Button(
-                onClick = onRead,
-                modifier = Modifier.fillMaxWidth().height(46.dp),
-                enabled = chapters.isNotEmpty(),
-            ) {
-                Text(if (chapters.isEmpty()) "目录尚未就绪" else "查看目录 · 共 ${chapters.size} 章")
             }
 
             if (loading) {
@@ -218,6 +214,19 @@ fun DetailScreen(
 
             Spacer(Modifier.height(30.dp))
         }
+    }
+}
+
+/**
+ * 状态兜底（第 2 条）：书源未给 status 时，从分类/简介里嗅「完结 / 连载」字样推断，
+ * 总比一律显示「未知」有信息量。
+ */
+private fun inferStatus(kind: String?, intro: String?): String {
+    val hay = (kind ?: "") + " " + (intro ?: "")
+    return when {
+        hay.contains("完结") || hay.contains("完本") -> "已完结"
+        hay.contains("连载") -> "连载中"
+        else -> "未知"
     }
 }
 

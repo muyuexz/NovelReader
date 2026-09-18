@@ -131,6 +131,14 @@ private fun NovelApp() {
     // 记录最近阅读的章节，返回目录时可高亮
     var lastChapterUrl by remember { mutableStateOf<String?>(null) }
 
+    // 正文章节缓存（第 6 条）：点进阅读后台预取后续章节，翻页命中即秒开
+    val contentCache = remember {
+        java.util.concurrent.ConcurrentHashMap<String, String>()
+    }
+    val prefetching = remember {
+        java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
+    }
+
     // 首页 Tab（0 = 书架，1 = 发现/搜索）/ 详情页
     var homeTab by remember { mutableStateOf(0) }
     var showDetail by remember { mutableStateOf(false) }
@@ -193,27 +201,61 @@ private fun NovelApp() {
         }
     }
 
-    // 正文读取统一入口：首次点章 / 上一章 / 下一章共用；带防串台守卫。
+    // 后台预取某章的后续 2 章正文（第 6 条）：串行、去重，命中缓存后翻页零等待。
+    val prefetchAfter: (BookChapter) -> Unit = pre@{ cur ->
+        val b = currentBook ?: return@pre
+        val src = b.source ?: return@pre
+        val list = chapters
+        val from = list.indexOfFirst { it.url == cur.url }
+        if (from < 0) return@pre
+        scope.launch(Dispatchers.IO) {
+            var fetched = 0
+            var i = from + 1
+            while (i < list.size && fetched < 2) {
+                val c = list[i]
+                if (!contentCache.containsKey(c.url) && prefetching.add(c.url)) {
+                    val t = runCatching { BookSourceEngine.getContent(src, b, c) }.getOrDefault("")
+                    if (t.isNotBlank()) contentCache[c.url] = t else prefetching.remove(c.url)
+                    fetched++
+                }
+                i++
+            }
+        }
+    }
+
+    // 正文读取统一入口：首次点章 / 上一章 / 下一章共用；带防串台守卫 + 缓存命中（第 6 条）。
     val loadChapter: (BookChapter) -> Unit = load@{ ch ->
         val b = currentBook ?: return@load
         val src = b.source ?: return@load
         currentChapter = ch
         lastChapterUrl = ch.url
-        content = ""
-        loadingContent = true
+        // 命中缓存：直接出正文，翻页零等待；未命中才走网络并显示 loading。
+        val cached = contentCache[ch.url]
+        if (cached != null) {
+            content = cached
+            loadingContent = false
+        } else {
+            content = ""
+            loadingContent = true
+        }
         scope.launch {
             // 进度写入与正文拉取并发：进度是本地 IO，不该拖慢正文首屏（第 8 条）
             launch(Dispatchers.IO) {
                 runCatching { ShelfRepository.updateProgress(context, b.bookUrl, src.bookSourceUrl, ch) }
             }
-            val txt = withContext(Dispatchers.IO) {
-                runCatching { BookSourceEngine.getContent(src, b, ch) }.getOrDefault("")
+            if (cached == null) {
+                val txt = withContext(Dispatchers.IO) {
+                    runCatching { BookSourceEngine.getContent(src, b, ch) }.getOrDefault("")
+                }
+                if (txt.isNotBlank()) contentCache[ch.url] = txt
+                // 快速连点翻章时，只有仍是最新选中的章节才允许回填，避免串台。
+                if (currentChapter === ch) {
+                    content = txt.ifBlank { "（正文解析为空：书源规则不匹配或网络失败）" }
+                    loadingContent = false
+                }
             }
-            // 快速连点翻章时，只有仍是最新选中的章节才允许回填，避免串台。
-            if (currentChapter === ch) {
-                content = txt.ifBlank { "（正文解析为空：书源规则不匹配或网络失败）" }
-                loadingContent = false
-            }
+            // 正文稳了就把后面几章也拉进缓存，翻页不再等网络。
+            prefetchAfter(ch)
         }
     }
 
@@ -264,9 +306,7 @@ private fun NovelApp() {
     val inShelf = shelfEntryNow != null
     val continueChapter = chapters.firstOrNull { it.url == shelfEntryNow?.lastReadChapterUrl }
         ?: chapters.firstOrNull()
-    val onContinue: (() -> Unit)? = if (inShelf && continueChapter != null) {
-        { loadChapter(continueChapter) }
-    } else null
+    // onContinue 已并入详情页底部「阅读」按钮（第 4 条）
     val onToggleShelf: () -> Unit = {
         val b = detailNow
         if (b != null && detailSourceUrl.isNotBlank()) {
@@ -346,8 +386,14 @@ private fun NovelApp() {
             error = tocError,
             inShelf = inShelf,
             onToggleShelf = onToggleShelf,
-            onRead = { showDetail = false },
-            onContinue = onContinue,
+            onRead = {
+                // 第 4 条：底部右侧「阅读」→ 直接开读（有进度续读，否则第一章）
+                val target = continueChapter
+                if (target != null) {
+                    showDetail = false
+                    loadChapter(target)
+                }
+            },
             onRetry = { openBook(openBookNow) },
         )
 
