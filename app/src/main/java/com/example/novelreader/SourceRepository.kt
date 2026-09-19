@@ -205,29 +205,60 @@ object SourceRepository {
         val authorKey = normalize(book.author)
         val query = book.name.trim().ifBlank { book.author.trim() }
         if (query.isBlank()) return 0
+        // 第57批刀A（主刀）：拆掉「命中即停」的早退。
+        // 旧实现 shouldStop = { groupRef.get() != null } 会在「首个命中批次」到达后
+        // 立刻掐断聚合，而首批常常只跑完几条源、命中组只有 1–2 条——于是把书原本
+        // 几十个兄弟源覆盖成 2 个（真机「一刷新就剩两个源」的根）。
+        // 现在改为「持续取更大的命中组」，并用 onProgress 的已完成计数做稳定窗口：
+        // 命中组连续 STABLE_WINDOW 个源不再变大，才认定聚合收敛、收工。
+        val stableWindow = 64
         val groupRef = java.util.concurrent.atomic.AtomicReference<List<Book>?>()
+        val doneRef = java.util.concurrent.atomic.AtomicInteger(0)
+        val lastGrowDone = java.util.concurrent.atomic.AtomicInteger(0)
         runCatching {
             search(
                 key = query,
                 maxSources = 500,
                 onBatch = { batch ->
-                    if (groupRef.get() == null) {
-                        val hit = batch.firstOrNull {
-                            normalize(it.name) == nameKey && normalize(it.author) == authorKey
+                    val hit = batch.firstOrNull {
+                        normalize(it.name) == nameKey && normalize(it.author) == authorKey
+                    }
+                    if (hit != null) {
+                        val cand = listOf(hit) + hit.altSources
+                        val cur = groupRef.get()
+                        if (cur == null || cand.size > cur.size) {
+                            groupRef.set(cand)
+                            lastGrowDone.set(doneRef.get())
                         }
-                        if (hit != null) groupRef.set(listOf(hit) + hit.altSources)
                     }
                 },
-                shouldStop = { groupRef.get() != null },
+                onProgress = { d, _ -> doneRef.set(d) },
+                shouldStop = {
+                    groupRef.get() != null &&
+                        doneRef.get() - lastGrowDone.get() >= stableWindow
+                },
             )
         }
         val members = groupRef.get() ?: return 0
         // 当前书自己的「书源地址 + 书地址」身份，用来把它从兄弟列表里剔掉（避免自己换自己）。
+        // 第57批刀B：合并而非覆盖。
+        // 旧实现 `book.altSources = others` 是无条件覆盖——本轮只捞到 1–2 条时，
+        // 原表里几十条兄弟源会被直接抹平（真机「刷新后缩水到两个源」的直接成因）。
+        // 新语义「只增不减」：原有兄弟源 + 本轮命中的兄弟源，按「书源地址|书地址」
+        // 去重（同键以本轮结果为准），刷新永远补齐、绝不删源。
         val mySourceUrl = book.source?.bookSourceUrl?.takeIf { it.isNotBlank() } ?: book.origin
-        val others = members.filter { m ->
-            val u = m.source?.bookSourceUrl?.takeIf { it.isNotBlank() } ?: m.origin
-            !(u == mySourceUrl && m.bookUrl == book.bookUrl)
+        val merged = LinkedHashMap<String, Book>()
+        for (b in book.altSources) {
+            val u = b.source?.bookSourceUrl?.takeIf { it.isNotBlank() } ?: b.origin
+            merged[u + "|" + b.bookUrl] = b
         }
+        for (m in members) {
+            val u = m.source?.bookSourceUrl?.takeIf { it.isNotBlank() } ?: m.origin
+            // 剔掉当前书自己（同源同书地址），避免列表里出现「自己换自己」。
+            if (u == mySourceUrl && m.bookUrl == book.bookUrl) continue
+            merged[u + "|" + m.bookUrl] = m
+        }
+        val others = merged.values.filter { it !== book }
         if (others.isEmpty()) return 0
         // 第45批刀D 的口径一并保住：换到任意一个兄弟源，它的 altSources 也必须齐全。
         val all = listOf(book) + others
