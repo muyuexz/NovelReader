@@ -58,6 +58,7 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -181,6 +182,11 @@ private fun NovelApp(
 
     // 目录
     var currentBook by remember { mutableStateOf<Book?>(null) }
+    // 第48批刀A：详情元数据「回填完成」信号。
+    // Book 是普通 class（字段非 Compose State），后台 getBookInfo 把 wordCount 等写进
+    // 同一个对象时 Compose 察觉不到；自增这个版本号，配合 key(detailTick) 强制详情页
+    // 重建一次，把「搜索阶段的字数」换成「详情页/目录回填后的字数」。
+    var detailTick by remember { mutableStateOf(0) }
     var chapters by remember { mutableStateOf(listOf<BookChapter>()) }
     var loadingToc by remember { mutableStateOf(false) }
     var tocError by remember { mutableStateOf<String?>(null) }
@@ -302,6 +308,10 @@ private fun NovelApp(
                 }
             }
             loadingToc = false
+            // 第48批刀A：回填完成 → 自增版本号，驱动详情页重组（见 key(detailTick)）。
+            // 单源场景 winner === book，currentBook 引用从头到尾没变，不这样做详情页永远
+            // 停在搜索阶段那一版字数（多数 Legado 搜索页根本不给 wordCount → 显示「未知」）。
+            detailTick++
             // 详情拿到了就顺手刷进书架（不在书架里则无操作）
             val src = book.source
             if (src != null) {
@@ -515,6 +525,8 @@ private fun NovelApp(
                 if (effective !== nb) nb.lastChapter = it
             }
             loadingToc = false
+            // 第48批刀A：换源回填完成，同样自增版本号刷新详情页字数。
+            detailTick++
             resumeTarget = null
             val target = list.firstOrNull { it.title == anchorTitle && !anchorTitle.isNullOrBlank() }
                 ?: list.getOrNull((ratio * list.size).toInt().coerceIn(0, list.size - 1))
@@ -712,13 +724,14 @@ private fun NovelApp(
             cachedUrls = remember(cacheTick) { contentCache.keys.toSet() },
         )
 
-        openBookNow != null && showDetail -> DetailScreen(
-            book = openBookNow,
-            chapters = chapters,
-            loading = loadingToc,
-            error = tocError,
-            inShelf = inShelf,
-            onToggleShelf = onToggleShelf,
+        openBookNow != null && showDetail -> key(openBookNow?.bookUrl, detailTick) {
+            DetailScreen(
+                book = openBookNow,
+                chapters = chapters,
+                loading = loadingToc,
+                error = tocError,
+                inShelf = inShelf,
+                onToggleShelf = onToggleShelf,
                 onRead = {
                     // 第 4 条：底部右侧「阅读」→ 直接开读（有进度续读，否则第一章）。
                     // 第 7 批第 2 条：不再清掉 showDetail，阅读页返回时才能回详情页而非目录页。
@@ -733,11 +746,11 @@ private fun NovelApp(
                         loadChapter(target)
                     }
                 },
-            onRetry = { openBook(openBookNow) },
-            // 第43批刀C：详情页失败态「换个源试试」→ 复用阅读页 switchSource 换源链路。
-            onSwitchSource = switchSource,
-        )
-
+                onRetry = { openBook(openBookNow) },
+                // 第43批刀C：详情页失败态「换个源试试」→ 复用阅读页 switchSource 换源链路。
+                onSwitchSource = switchSource,
+            )
+        }
         openBookNow != null -> TocScreen(
             book = openBookNow,
             chapters = chapters,

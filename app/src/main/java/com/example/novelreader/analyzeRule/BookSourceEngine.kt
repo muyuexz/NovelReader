@@ -95,7 +95,8 @@ object BookSourceEngine {
                 // 这里把空串与「等于本页 URL」的伪封面一律清掉，交给详情兜底回填。
                 book.coverUrl = rule.getString(ruleSearch.coverUrl, null, true)
                     .takeIf { it.isNotBlank() && it != resp.url && it != searchUrl }
-                book.wordCount = rule.getString(ruleSearch.wordCount)
+                // 第48批刀B：搜索页字数多为位置型规则，抓歪即成日期/ID；脏值一律清成 null。
+                book.wordCount = WordCountSanitizer.sanitize(rule.getString(ruleSearch.wordCount))
                 book.lastChapter = rule.getString(ruleSearch.lastChapter)
                 book.bookUrl = rule.getString(ruleSearch.bookUrl, null, true)
                 if (book.name.isNotBlank() && book.bookUrl.isNotBlank()) books += book
@@ -136,7 +137,10 @@ object BookSourceEngine {
             rule.getString(rbi.author).takeIf { it.isNotBlank() }?.let { book.author = it }
             rule.getString(rbi.kind).takeIf { it.isNotBlank() }?.let { book.kind = it }
             rule.getString(rbi.intro).takeIf { it.isNotBlank() }?.let { book.intro = it }
-            rule.getString(rbi.wordCount).takeIf { it.isNotBlank() }?.let { book.wordCount = it }
+            // 第48批刀B（详情路径）：同样清洗。位置型规则（dd span.3@text / tag.td.3@text 一类）
+            // 页面结构一变就抓到日期/ID 数字串，旧逻辑直接落库 → 详情页把 "2019-05-01"
+            // 抠成 20190501 显示成「2019.1万」。清洗后为 null 时保留搜索阶段已校验过的值。
+            WordCountSanitizer.sanitize(rule.getString(rbi.wordCount))?.let { book.wordCount = it }
             rule.getString(rbi.lastChapter).takeIf { it.isNotBlank() }?.let { book.lastChapter = it }
             rule.getString(rbi.status).takeIf { it.isNotBlank() }?.let { book.status = it }
             // 第34批：同样防「空规则回落成详情页 URL」的伪封面。
