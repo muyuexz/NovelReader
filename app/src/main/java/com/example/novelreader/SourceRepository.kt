@@ -14,6 +14,8 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * 书源仓库：负责把书源 JSON 装进内存，并把「关键词搜索」分发到多条书源上并发执行。
@@ -52,7 +54,14 @@ object SourceRepository {
                 val (ok, bad) = runCatching { BookSourceParser.parseLenient(text) }
                     .getOrElse { emptyList<BookSource>() to 0 }
                 parseFailed = bad
-                sources = ok
+                // 第40批：历史快照里同一个站可能挂着多个换名实例（旧口径只按
+                // url_name 去重，拦不住）。装载时一次性按站级键收敛并落盘，
+                // 避免老数据每次启动都要再算一遍。
+                val deduped = dedupeByStation(ok)
+                sources = deduped
+                if (deduped.size != ok.size) {
+                    runCatching { writeSnapshot(context, deduped) }
+                }
             }
             loaded = true
         }
@@ -89,37 +98,67 @@ object SourceRepository {
      */
     suspend fun search(
         key: String,
-        maxSources: Int = 40,
+        maxSources: Int = 300,
         concurrency: Int = 8,
-        perSourceTimeoutMs: Long = 12000,
+        perSourceTimeoutMs: Long = 8000,
         onBatch: (List<Book>) -> Unit,
+        onProgress: ((done: Int, total: Int) -> Unit)? = null,
+        shouldStop: () -> Boolean = { false },
     ): Int {
-        val targets = enabled().take(maxSources)
+        // 第40批：治「无论导入多少条源，命中永远只有几条」。
+        // 旧实现 take(40) 把参与源钉死在列表头部 40 条（列表顺序 = 导入顺序，
+        // 所以后面导入的源永远轮不到）。现在改为「档位上限」：
+        // maxSources <= 0 表示全量，否则取前 maxSources 条，默认 300 条均衡档。
+        // 首波 48 条排在最前先发，用户几秒内就能看到第一批结果。
+        val all = enabled()
+        val targets = if (maxSources <= 0) all else all.take(maxSources)
         val sem = Semaphore(concurrency)
         val lock = Any()
         val acc = ArrayList<Book>()
+        val total = targets.size
+        val done = AtomicInteger(0)
+        // 第40批：首波 48 条先发（默认并发 8，约 6 轮就能出水），
+        // 让用户几秒内看到第一批结果；其余源继续在后台把池子灌满。
+        val fastWave = 48
+        val progressStep = 6
+        val ordered = if (total <= fastWave) targets
+        else targets.take(fastWave) + targets.drop(fastWave)
+        val lastTick = AtomicLong(0L)
         return coroutineScope {
-            val jobs = targets.map { src ->
+            val jobs = ordered.map { src ->
                 async(Dispatchers.IO) {
                     sem.withPermit {
+                        if (shouldStop()) return@withPermit
                         // 第 24 批加固：整段（含 filter / rank / onBatch 回调）都吞
                         // 异常。原实现 runCatching 只包住 withTimeout，isRelevant /
                         // rankByRelevance / onBatch 都在外面，单源一抛就炸穿协程。
                         runCatching {
-                        val hits = runCatching {
-                            withTimeout(perSourceTimeoutMs) { BookSourceEngine.search(src, key) }
-                        }.getOrDefault(emptyList()).filter { isRelevant(it, key) }
-                        if (hits.isNotEmpty()) {
-                            // 累积 + 全量重排：回调的是「当前已命中的有序快照」，
-                            // 不是增量批次。UI 直接整体替换即可，列表不会因到达顺序而抖。
-                            val snapshot = synchronized(lock) {
-                                acc += hits
-                                rankByRelevance(acc, key)
-                            // 第 24 批：按 bookUrl 去重，避免多源同一本书造成列表重复。
-                            // 第 26 批：再按「书名 + 作者」聚合，同名书合并成一条（其余源进 altSources）。
-                            }.distinctBy { it.bookUrl }.let { aggregate(it) }
-                            onBatch(snapshot)
+                            val hits = runCatching {
+                                withTimeout(perSourceTimeoutMs) { BookSourceEngine.search(src, key) }
+                            }.getOrDefault(emptyList()).filter { isRelevant(it, key) }
+                            if (hits.isNotEmpty()) {
+                                // 累积 + 全量重排：回调的是「当前已命中的有序快照」，
+                                // 不是增量批次。UI 直接整体替换即可，列表不会因到达顺序而抖。
+                                // 第40批：distinctBy / aggregate 一并挪进锁内——它们会写
+                                // Book.altSources，出锁并发跑就是数据竞争（会互相清空兄弟源）。
+                                val snapshot = synchronized(lock) {
+                                    acc += hits
+                                    rankByRelevance(acc, key)
+                                        .distinctBy { it.bookUrl }
+                                        .let { aggregate(it) }
+                                }
+                                if (!shouldStop()) onBatch(snapshot)
+                            }
                         }
+                        // 第40批：进度上报。逐源回调会刷爆 UI，这里按
+                        //「每 6 源 / 距上次 ≥400ms / 收尾」三档节流。
+                        val d = done.incrementAndGet()
+                        val now = System.currentTimeMillis()
+                        val prev = lastTick.get()
+                        if (d == total || d % progressStep == 0 || now - prev >= 400L) {
+                            if (d == total || lastTick.compareAndSet(prev, now)) {
+                                runCatching { onProgress?.invoke(d, total) }
+                            }
                         }
                     }
                 }
@@ -295,33 +334,66 @@ object SourceRepository {
     /** 当前内存快照（书源管理页展示用）。 */
     fun snapshot(): List<BookSource> = sources
 
-    /** 整包落盘 + 热重载内存与计数。 */
-    @Synchronized
-    private fun writeAndReload(context: Context, list: List<BookSource>) {
+    /** 只负责把书源快照落盘，返回是否写入成功；不改内存态。 */
+    private fun writeSnapshot(context: Context, list: List<BookSource>): Boolean =
         runCatching {
-            val dir = context.getExternalFilesDir(null) ?: return
+            val dir = context.getExternalFilesDir(null) ?: return@runCatching false
             if (!dir.exists()) dir.mkdirs()
             dir.resolve(IMPORTED_NAME).writeText(
                 writeJson.encodeToString(ListSerializer(BookSource.serializer()), list),
             )
-        }
+            true
+        }.getOrDefault(false)
+
+    /**
+     * 第40批：按「站级键」收敛重复书源，保留每组第一条。
+     *
+     * 收敛键用 [BookSource.dedupeKey]（URL 归一化）而不是 [BookSource.getKey]，
+     * 因为 getKey 把书源名一起拼了进来——同一个站换个名字就变成两条源，
+     * 正是「导入很多条、实际只有几条生效」的根因之一。
+     */
+    private fun dedupeByStation(list: List<BookSource>): List<BookSource> {
+        if (list.size <= 1) return list
+        val seen = HashSet<String>(list.size * 2)
+        val out = ArrayList<BookSource>(list.size)
+        for (s in list) if (seen.add(s.dedupeKey())) out += s
+        return out
+    }
+
+    /**
+     * 第40批：手动触发一次「站级去重」，返回清理掉的重复源条数。
+     * 供书源管理页的「清理重复源」入口调用（历史快照里可能早已堆了重复）。
+     */
+    @Synchronized
+    fun dedupeExisting(context: Context): Int {
+        val deduped = dedupeByStation(sources)
+        val removed = sources.size - deduped.size
+        if (removed > 0) writeAndReload(context, deduped)
+        return removed
+    }
+    private fun writeAndReload(context: Context, list: List<BookSource>) {
+        writeSnapshot(context, list)
         sources = list
         parseFailed = 0
         loaded = true
     }
 
     /**
-     * 导入书源：把 [incoming] 合并进现有集合，按 [BookSource.getKey]（url_name）去重，
-     * 同键以新导入的为准；整体落盘并热重载。返回「净新增」条数。
+     * 导入书源：把 [incoming] 合并进现有集合，按 [BookSource.dedupeKey]（站级归一化 URL）
+     * 去重，同键以新导入的为准；整体落盘并热重载。返回「净新增」条数。
      */
     @Synchronized
     fun import(context: Context, incoming: List<BookSource>): Int {
         val merged = sources.toMutableList()
         val index = HashMap<String, Int>(merged.size * 2)
-        merged.forEachIndexed { i, s -> index[s.getKey()] = i }
+        // 第40批：建键从 getKey()（url_name，把书源名也拼了进去）换成 dedupeKey()。
+        // 同一个站换个名字再导一次，过去会被当成新源追加，于是「导了几百条、
+        // 实际只有几十个站」——搜索时同站重复源互相挤占配额，命中率被稀释。
+        // 现在同站收敛为一条（保留路径，所以同站不同接口的有效源不会被误合并）。
+        merged.forEachIndexed { i, s -> index[s.dedupeKey()] = i }
         var added = 0
         for (s in incoming) {
-            val k = s.getKey()
+            val k = s.dedupeKey()
             val i = index[k]
             if (i == null) {
                 // 第22批：新导入的书源默认启用——导入即可用，不必再去点开关。

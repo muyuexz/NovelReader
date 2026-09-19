@@ -282,7 +282,7 @@ fun BookCard(book: Book, onClick: () -> Unit) {
                         if (book.altSources.isNotEmpty()) {
                             if (!book.originName.isNullOrBlank()) Spacer(Modifier.width(6.dp))
                             // 第 26 批：聚合后告诉用户「这条背后还有几个源」，进阅读页可换。
-                            TagPill("${book.altSources.size + 1} 个书源 · 可换源")
+                            TagPill("${book.altSources.size + 1} 个源命中 · 可换源")
                         }
                     }
                 }

@@ -160,6 +160,11 @@ private fun NovelApp(
     // 返回时列表重建只能停在第一条。提到条件链之外，位置才能跨详情页存活。
     // 「新搜索回到顶部」的原有意图不变：发起新搜索时换成全新实例即可。
     var searchListState by remember { mutableStateOf(LazyListState()) }
+    // 第40批：搜索进度与「停止搜索」。searchStop 是协作式取消标志——
+    // 搜索协程每源开工前看一眼，已发出的请求不打断（最多再等 8s 自然超时）。
+    var searchDone by remember { mutableStateOf(0) }
+    var searchTotal by remember { mutableStateOf(0) }
+    var searchStop by remember { mutableStateOf(false) }
 
     // 目录
     var currentBook by remember { mutableStateOf<Book?>(null) }
@@ -675,11 +680,19 @@ private fun NovelApp(
                         keyword = keyword,
                         onKeywordChange = { keyword = it },
                         searching = searching,
+                        searchDone = searchDone,
+                        searchTotal = searchTotal,
                         hasSearched = hasSearched,
                         hits = hits,
                         sourceCount = sourceCount,
                         sourceFailed = sourceFailed,
                         sourcesLoaded = sourcesLoaded,
+                        // 第40批：停止搜索。先立取消标志（拦住后续 onBatch 回填），
+                        // 再收转圈可见态；后台在飞的请求会自行跑完，不再打扰 UI。
+                        onStopSearch = {
+                            searchStop = true
+                            searching = false
+                        },
                         onSearch = {
                             val k = keyword.trim()
                             if (k.isNotEmpty() && !searching) {
@@ -689,9 +702,22 @@ private fun NovelApp(
                                 // 从详情页返回不会走这里，位置自然保留。
                                 searchListState = LazyListState()
                                 hits = emptyList()
+                                searchStop = false
+                                searchDone = 0
+                                searchTotal = 0
                                 scope.launch {
                                     // 回调是全量有序快照（已按匹配度/源权重排序），整体替换即可。
-                                    SourceRepository.search(k) { ranked -> hits = ranked }
+                                    // 第40批：新增进度回调与协作停止——大书源集合下
+                                    // 用户能看见「已搜 x/y 源」，也能中途叫停。
+                                    SourceRepository.search(
+                                        key = k,
+                                        onBatch = { ranked -> if (!searchStop) hits = ranked },
+                                        onProgress = { d, t ->
+                                            searchDone = d
+                                            searchTotal = t
+                                        },
+                                        shouldStop = { searchStop },
+                                    )
                                     searching = false
                                     // 第34批：搜索封面兜底。大多数书源的搜索规则不给封面
                                     // （封面规则只写在详情页），这里对仍无封面的前 12 条，
@@ -792,6 +818,18 @@ private fun NovelApp(
                                 sourceNotice = msg
                             }
                         },
+                        // 第40批 G刀：一键清理同站重复源（按站级归一化 URL 去重）。
+                        // 只删重复，不动启用状态与顺序；结果回显清理条数。
+                        onDedupe = {
+                            scope.launch {
+                                val removed = withContext(Dispatchers.IO) {
+                                    SourceRepository.dedupeExisting(context)
+                                }
+                                refreshSources()
+                                sourceNotice =
+                                    if (removed > 0) "已清理 $removed 条重复书源" else "没有发现重复书源"
+                            }
+                        },
                         onDelete = { keys ->
                             scope.launch {
                                 val removed = withContext(Dispatchers.IO) {
@@ -881,12 +919,16 @@ private fun SearchScreen(
     keyword: String,
     onKeywordChange: (String) -> Unit,
     searching: Boolean,
+    searchDone: Int,
+    searchTotal: Int,
     hasSearched: Boolean,
     hits: List<Book>,
     sourceCount: Int,
     sourceFailed: Int,
     sourcesLoaded: Boolean,
     onSearch: () -> Unit,
+    // 第40批：停止搜索（协作式取消）。已发出的请求不打断，只是不再回填结果。
+    onStopSearch: () -> Unit,
     onOpen: (Book) -> Unit,
     // 第 28 批：滚动状态改由调用方持有（NovelApp 里的 searchListState），
     // 从详情页返回时位置还在；「新搜索回顶」由调用方换新实例实现。
@@ -1011,17 +1053,29 @@ private fun SearchScreen(
                                 )
                                 Spacer(Modifier.width(6.dp))
                                 Text(
-                                    "搜索中…",
+                                    // 第40批：进度可见——「已搜 x/y 源」。
+                                    // 首波 48 源几秒内出水，长尾继续在后台跑。
+                                    if (searchTotal > 0) "已搜 $searchDone/$searchTotal 源" else "搜索中…",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
                             Spacer(Modifier.weight(1f))
-                            Text(
-                                "已过滤无关",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                            if (searching) {
+                                // 第40批：停止搜索。协作式取消，已发出的请求不打断。
+                                TextButton(
+                                    onClick = onStopSearch,
+                                    contentPadding = PaddingValues(horizontal = 8.dp),
+                                ) {
+                                    Text("停止", style = MaterialTheme.typography.labelSmall)
+                                }
+                            } else {
+                                Text(
+                                    "已过滤无关",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
                     }
                     Spacer(Modifier.height(10.dp))
@@ -1046,7 +1100,11 @@ private fun SearchScreen(
 
                 searching -> StateBlock(
                     title = "正在并发搜索",
-                    description = "已向 $sourceCount 条书源发出请求…",
+                    description = if (searchTotal > 0) {
+                        "已搜 $searchDone/$searchTotal 条书源，命中会陆续出现…"
+                    } else {
+                        "已向 $sourceCount 条书源发出请求…"
+                    },
                     spinner = true,
                 )
                 !sourcesLoaded -> StateBlock(

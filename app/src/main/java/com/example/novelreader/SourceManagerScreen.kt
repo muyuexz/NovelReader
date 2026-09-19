@@ -72,6 +72,8 @@ fun SourceManagerScreen(
     onImportText: (String) -> Unit,
     onImportNetwork: (String) -> Unit,
     onAddSource: (BookSource) -> Unit,
+    // 第40批 G刀：清理重复源入口（按站级归一化 URL 去重，保留首次出现）。
+    onDedupe: () -> Unit,
     onDelete: (Set<String>) -> Unit,
     onToggle: (String, Boolean) -> Unit,
     onClearNotice: () -> Unit,
@@ -154,6 +156,15 @@ fun SourceManagerScreen(
                             onClick = {
                                 menuOpen = false
                                 showNewDialog = true
+                            },
+                        )
+                        // 第40批 G刀：一键清理重复源。同一个站换个名字重复导入时，
+                        // 历史数据里会留下多条同站源，这里按站级归一化 URL 收敛为一条。
+                        DropdownMenuItem(
+                            text = { Text("清理重复源") },
+                            onClick = {
+                                menuOpen = false
+                                onDedupe()
                             },
                         )
                     }

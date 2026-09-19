@@ -50,6 +50,37 @@ class BookSource(
      */
     fun getKey(): String = bookSourceUrl + "_" + bookSourceName
 
+    /**
+     * 第40批：导入去重专用的「站级」归一化键。
+     *
+     * 与 [getKey] 刻意分开：getKey 会被书源 JS 当 cookie / 缓存键调用（见上），
+     * 而且把书源名也拼了进去——同一个站换个名字就变成两条不同的源，
+     * 这正是「导入了上千条、实际只有几条生效」的根因。dedupeKey 只回答一个
+     * 问题：这两条源是不是同一个站。归一化规则：
+     * - 去掉协议头（http / https 视为同站）
+     * - 去掉 query / fragment
+     * - 主机名转小写、去掉开头的 www.
+     * - 去掉路径尾部的斜杠
+     * 路径本身保留，避免把「同一站点下不同接口」的有效源误合并。
+     * URL 为空（或归一化后为空）时回落到 [getKey]，不把所有空 URL 源搅成一条。
+     */
+    fun dedupeKey(): String {
+        val raw = bookSourceUrl.trim()
+        if (raw.isEmpty()) return getKey()
+        var s = raw
+        val scheme = s.indexOf("://")
+        if (scheme >= 0) s = s.substring(scheme + 3)
+        s = s.substringBefore('?').substringBefore('#')
+        val slash = s.indexOf('/')
+        var host = if (slash < 0) s else s.substring(0, slash)
+        var path = if (slash < 0) "" else s.substring(slash)
+        host = host.lowercase()
+        if (host.startsWith("www.")) host = host.substring(4)
+        while (path.endsWith("/")) path = path.dropLast(1)
+        val out = host + path
+        return out.ifEmpty { getKey() }
+    }
+
     override val variableMap = HashMap<String, String>()
 
     private val bigVariableMap = HashMap<String, String>()
