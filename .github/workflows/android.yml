@@ -31,18 +31,18 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x ./gradlew
 
-      # 固定 debug 签名 key：ubuntu runner 每次都是全新 VM，AGP 会现场随机生成
-      # ~/.android/debug.keystore，导致每次构建签名指纹不同 → 覆盖安装报
-      # INSTALL_FAILED_UPDATE_INCOMPATIBLE。这里从仓库还原一份固定 keystore。
-      - name: Restore fixed debug keystore
-        run: |
-          mkdir -p "$HOME/.android"
-          cp ci/debug.keystore "$HOME/.android/debug.keystore"
-          chmod 600 "$HOME/.android/debug.keystore"
-          keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android | grep -i 'SHA256:' || true
-
       - name: Build debug APK
         run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      # 诊断：把最终 APK 的签名证书指纹打出来，便于跨 run 核对签名是否恒定。
+      # 固定签名由 app/build.gradle.kts 的 signingConfigs.ciFixed 显式指向 ci/debug.keystore。
+      - name: Verify APK signing certificate
+        run: |
+          APK=$(ls app/build/outputs/apk/debug/*.apk | head -1)
+          echo "APK = $APK"
+          APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | tail -1)
+          echo "apksigner = $APKSIGNER"
+          if [ -n "$APKSIGNER" ]; then "$APKSIGNER" verify --print-certs "$APK"; fi
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4

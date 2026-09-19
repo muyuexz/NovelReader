@@ -8,6 +8,20 @@ android {
     namespace = "com.example.novelreader"
     compileSdk = 34
 
+    // 第50批：把 debug 签名钉死在仓库内的固定 keystore 上。
+    // 之前依赖 AGP 自动生成 $HOME/.android/debug.keystore，而 GitHub runner 每次都是
+    // 全新 VM，key 随机生成 → 每次构建证书指纹都不同，覆盖安装必然
+    // INSTALL_FAILED_UPDATE_INCOMPATIBLE。这里显式指向仓库内固定 keystore，
+    // 不再依赖 AGP 对默认路径/默认凭据的任何隐式行为。
+    signingConfigs {
+        create("ciFixed") {
+            storeFile = rootProject.file("ci/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     defaultConfig {
         applicationId = "com.example.novelreader"
         minSdk = 24
@@ -23,6 +37,8 @@ android {
 
     buildTypes {
         debug {
+            // 第50批：debug 交付沿用仓库内固定 keystore，签名指纹跨构建恒定。
+            signingConfig = signingConfigs.getByName("ciFixed")
             //第38批 F刀：debug 交付通道也开 R8 —— 缩未用代码 + 缩未用资源，
             //交付的 APK 更小、冷启动更稳。
             //包名后缀 .debug 与签名保持原样 => 工作流、抓包脚本、用户数据、
