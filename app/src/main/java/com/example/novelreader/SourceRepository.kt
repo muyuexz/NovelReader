@@ -96,9 +96,26 @@ object SourceRepository {
      *
      * @return 命中的书籍总数。
      */
+    /**
+     * 第42批：在 [list] 里按「等步长」均匀抽 [n] 条，保持原有相对顺序。
+     *
+     * 旧实现 take(N) 取的是列表头部 N 条，而列表顺序 = 用户导入顺序，
+     * 于是 3000 条源每次搜索永远只搜前 N 条，第 1500 条的好源永远轮不上。
+     * 改为按 index 等步长抽样后，每次搜索都能覆盖源池的各个段位。
+     */
+    private fun <T> sampleEvenly(list: List<T>, n: Int): List<T> {
+        if (n <= 0 || list.size <= n) return list
+        val out = ArrayList<T>(n)
+        val step = list.size.toDouble() / n
+        for (i in 0 until n) {
+            out.add(list[(i * step).toInt().coerceIn(0, list.size - 1)])
+        }
+        return out
+    }
+
     suspend fun search(
         key: String,
-        maxSources: Int = 300,
+        maxSources: Int = 500,
         concurrency: Int = 8,
         perSourceTimeoutMs: Long = 8000,
         onBatch: (List<Book>) -> Unit,
@@ -106,12 +123,13 @@ object SourceRepository {
         shouldStop: () -> Boolean = { false },
     ): Int {
         // 第40批：治「无论导入多少条源，命中永远只有几条」。
-        // 旧实现 take(40) 把参与源钉死在列表头部 40 条（列表顺序 = 导入顺序，
-        // 所以后面导入的源永远轮不到）。现在改为「档位上限」：
-        // maxSources <= 0 表示全量，否则取前 maxSources 条，默认 300 条均衡档。
+        // 第42批：① 默认档 300 → 500；② take(N) 改为「均匀抽样」——
+        // 旧 take(N) 按列表顺序取头部，而列表顺序 = 导入顺序，3000 条源里
+        // 后面导入的好源永远轮不上；现在按等步长在全量源池抽 N 条，覆盖各段位。
+        // maxSources <= 0 表示全量（不抽样），默认 500 条均衡档。
         // 首波 48 条排在最前先发，用户几秒内就能看到第一批结果。
         val all = enabled()
-        val targets = if (maxSources <= 0) all else all.take(maxSources)
+        val targets = if (maxSources <= 0) all else sampleEvenly(all, maxSources)
         val sem = Semaphore(concurrency)
         val lock = Any()
         val acc = ArrayList<Book>()

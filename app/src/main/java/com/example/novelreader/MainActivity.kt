@@ -107,6 +107,9 @@ class MainActivity : ComponentActivity() {
             // 由设置页切换并持久化到 SharedPreferences，改动即时生效。
             val ctx = LocalContext.current
             var themeMode by remember { mutableStateOf(readThemeMode(ctx)) }
+            // 第42批：搜索书源范围提到根部持有（0 = 全部；否则为条数上限），
+            // 由设置页切换并持久化，改动即时生效。
+            var searchMaxSources by remember { mutableStateOf(readSearchMaxSources(ctx)) }
             NovelReaderTheme(themeMode = themeMode) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
@@ -117,6 +120,11 @@ class MainActivity : ComponentActivity() {
                         onThemeModeChange = {
                             themeMode = it
                             writeThemeMode(ctx, it)
+                        },
+                        searchMaxSources = searchMaxSources,
+                        onSearchMaxSourcesChange = {
+                            searchMaxSources = it
+                            writeSearchMaxSources(ctx, it)
                         },
                     )
                 }
@@ -135,6 +143,8 @@ class MainActivity : ComponentActivity() {
 private fun NovelApp(
     themeMode: Int,
     onThemeModeChange: (Int) -> Unit,
+    searchMaxSources: Int,
+    onSearchMaxSourcesChange: (Int) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -712,6 +722,8 @@ private fun NovelApp(
                                     // 用户能看见「已搜 x/y 源」，也能中途叫停。
                                     SourceRepository.search(
                                         key = k,
+                                        // 第42批：把设置页选的「搜索书源范围」真正透传下去（默认 500）。
+                                        maxSources = searchMaxSources,
                                         onBatch = { ranked -> if (!searchStop) hits = ranked },
                                         onProgress = { d, t ->
                                             searchDone = d
@@ -854,6 +866,8 @@ private fun NovelApp(
                     SettingsScreen(
                         themeMode = themeMode,
                         onThemeModeChange = onThemeModeChange,
+                        searchMax = searchMaxSources,
+                        onSearchMaxChange = onSearchMaxSourcesChange,
                     )
                 }
             }
@@ -1337,6 +1351,19 @@ private fun writeToDownloads(context: android.content.Context, name: String, tex
 private const val APP_PREFS = "app_prefs"
 private const val KEY_THEME_MODE = "theme_mode"
 
+// 第42批：搜索书源范围。默认 500，必须与 SourceRepository.search(maxSources) 的默认值一致。
+private const val KEY_SEARCH_MAX_SOURCES = "search_max_sources"
+private const val DEFAULT_SEARCH_MAX_SOURCES = 500
+
+private fun readSearchMaxSources(ctx: Context): Int =
+    ctx.getSharedPreferences(APP_PREFS, Context.MODE_PRIVATE)
+        .getInt(KEY_SEARCH_MAX_SOURCES, DEFAULT_SEARCH_MAX_SOURCES)
+
+private fun writeSearchMaxSources(ctx: Context, value: Int) {
+    ctx.getSharedPreferences(APP_PREFS, Context.MODE_PRIVATE)
+        .edit().putInt(KEY_SEARCH_MAX_SOURCES, value).apply()
+}
+
 private fun readThemeMode(ctx: Context): Int =
     ctx.getSharedPreferences(APP_PREFS, Context.MODE_PRIVATE).getInt(KEY_THEME_MODE, 0)
 
@@ -1407,8 +1434,20 @@ private fun SettingsCard(title: String, content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun SettingsScreen(themeMode: Int, onThemeModeChange: (Int) -> Unit) {
+private fun SettingsScreen(
+    themeMode: Int,
+    onThemeModeChange: (Int) -> Unit,
+    searchMax: Int,
+    onSearchMaxChange: (Int) -> Unit,
+) {
     val themeOptions = listOf("跟随系统" to 0, "浅色" to 1, "深色" to 2)
+    // 第42批：搜索书源范围档位。0 = 全部（不抽样，最慢）。
+    val searchScopeOptions = listOf(
+        "300 条（快）" to 300,
+        "500 条（推荐）" to 500,
+        "1000 条（广）" to 1000,
+        "全部（慢）" to 0,
+    )
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 28.dp),
@@ -1450,6 +1489,40 @@ private fun SettingsScreen(themeMode: Int, onThemeModeChange: (Int) -> Unit) {
                             label,
                             style = MaterialTheme.typography.bodyLarge,
                             color = if (themeMode == mode) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
+            }
+        }
+        item {
+            SettingsCard("搜索 · 书源范围") {
+                Text(
+                    "每轮搜索派出的书源条数上限。源多时不必全搜，抽一部分最快出结果；" +
+                        "抽法按等步长均匀取样，每次覆盖不同段位，不会总搜同一批。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                searchScopeOptions.forEach { (label, value) ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { onSearchMaxChange(value) }
+                            .padding(vertical = 10.dp, horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            if (searchMax == value) "●" else "○",
+                            color = if (searchMax == value) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            label,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = if (searchMax == value) MaterialTheme.colorScheme.primary
                             else MaterialTheme.colorScheme.onSurface,
                         )
                     }
