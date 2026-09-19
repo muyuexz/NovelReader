@@ -1,6 +1,7 @@
 package com.example.novelreader.analyzeRule
 
 import java.util.Locale
+import kotlin.math.abs
 
 /**
  * 第 51 批 C-lite：总字数「可信度」解析。
@@ -22,44 +23,90 @@ import java.util.Locale
  */
 object WordCountResolver {
 
-    /** 单章字数超过该值即视为「疑似把字节数当字数」。 */
+    /** 单章字数超过该值即视为「疑似把字节数当字数」（偏大方向）。 */
     const val BYTE_RATIO_HINT: Long = 8_000L
+
+    /** 单章字数低于该值即视为「疑似抓错字段」（偏小方向：日期 / ID / 章节数被当成字数）。 */
+    const val MIN_PER_CHAPTER: Long = 200L
+
+    /** 本地估算值与源值的相对偏差超过该比例时，改用估算值。 */
+    private const val ESTIMATE_DEVIATION = 0.35
 
     /** 展示结果：[text] 是最终展示文本，[badge] 为角标（null 表示不显示）。 */
     data class Display(val text: String, val badge: String? = null)
 
+    /**
+     * 第 52 批 L1 + L2：
+     * - L1（双向量纲）：单章字数落在 [MIN_PER_CHAPTER, BYTE_RATIO_HINT] 之外即判异常，
+     *   同时覆盖「偏大＝字节数」与「偏小＝抓错字段」两个方向；
+     * - L2（本地估算）：[estimate] 由 WordCountEstimator 抽样正文现算，优先级最高。
+     * 每一档都有退路，正常源零额外成本。
+     */
     fun resolve(
         raw: String?,
         chapterCount: Int,
         altSources: List<Book> = emptyList(),
+        estimate: Long? = null,
     ): Display {
+        val est = estimate?.takeIf { it > 0L }
         val text = raw?.trim().orEmpty()
-        if (text.isEmpty()) return Display("未知")
+        val n = parseCount(text)
 
-        // 已带单位：人为量级，无法也不必换算，原样保留并标注「源站自报」。
-        if (text.any { it == '万' || it == '字' || it == 'W' || it == 'w' }) {
-            return Display(text, "源站自报")
+        // 源没给字数（或给的根本不是数字）：有本地估算就信估算。
+        if (n == null || n <= 0L) {
+            if (est != null) return Display("约" + format(est), "本地估算")
+            return if (text.isEmpty()) Display("未知") else Display(text, "源站自报")
         }
 
-        val n = parseCount(text) ?: return Display(text)
-        if (n <= 0L) return Display(text)
+        val hasUnit = text.any { it == '万' || it == '字' || it == 'W' || it == 'w' }
 
-        // 章节数未知 → 无从判定量纲，原样显示。
-        if (chapterCount <= 0) return Display(format(n))
+        // 章节数未知 → 无从判定量纲；有估算则信估算。
+        if (chapterCount <= 0) {
+            if (est != null) return Display("约" + format(est), "本地估算")
+            return Display(format(n), if (hasUnit) "源站自报" else null)
+        }
 
-        // 量级正常 → 原样显示（绝大多数源走这条，零额外成本）。
-        if (n / chapterCount < BYTE_RATIO_HINT) return Display(format(n))
+        val per = n / chapterCount
+        val abnormal = per < MIN_PER_CHAPTER || per > BYTE_RATIO_HINT
 
-        // —— 疑似字节数 —— 先看兄弟源有没有正常值。
+        // —— 量级正常 —— 唯一例外：本地估算与源值严重不符时信估算。
+        if (!abnormal) {
+            if (est != null && deviates(n, est)) return Display("约" + format(est), "本地估算")
+            return Display(format(n), if (hasUnit) "源站自报" else null)
+        }
+
+        // —— 量级异常 —— 本地估算优先级最高。
+        if (est != null) return Display("约" + format(est), "本地估算")
+
+        // 其次：兄弟源里的量级正常值。
         val ref = altSources.asSequence()
             .mapNotNull { it.wordCount }
             .mapNotNull { parseCount(it) }
             .filter { it > 0L }
-            .firstOrNull { (it / chapterCount) in 1L until BYTE_RATIO_HINT }
+            .firstOrNull { (it / chapterCount) in MIN_PER_CHAPTER until BYTE_RATIO_HINT }
         if (ref != null) return Display("约" + format(ref), "多源参考")
 
-        // 退路：按 UTF-8 中文 3 字节/字折算。
-        return Display("约" + format(n / 3), "量纲校正")
+        // 偏大（字节数嫌疑）→ 按 UTF-8 中文 3 字节/字折算。
+        if (per > BYTE_RATIO_HINT) return Display("约" + format(n / 3), "量纲校正")
+
+        // 偏小且无任何参照 → 原样显示但标注「存疑」，不伪造数字。
+        return Display(format(n), "存疑")
+    }
+
+    /** 这本书是否需要跑一次本地估算（L2）：源值缺失、或量级落在异常区。 */
+    fun needsEstimate(raw: String?, chapterCount: Int): Boolean {
+        if (chapterCount <= 0) return false
+        val n = parseCount(raw?.trim().orEmpty()) ?: return true
+        if (n <= 0L) return true
+        val per = n / chapterCount
+        return per < MIN_PER_CHAPTER || per > BYTE_RATIO_HINT
+    }
+
+    /** 源值与估算值是否「严重不符」（相对偏差超阈值）。 */
+    private fun deviates(source: Long, estimate: Long): Boolean {
+        val hi = maxOf(source, estimate)
+        if (hi <= 0L) return false
+        return abs(source - estimate).toDouble() / hi.toDouble() > ESTIMATE_DEVIATION
     }
 
     /** 解析「16870136」「623万」「533.2W」这类文本为字数量（Long）。 */

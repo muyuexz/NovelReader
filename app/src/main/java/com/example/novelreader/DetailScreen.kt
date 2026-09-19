@@ -26,6 +26,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -34,6 +35,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -41,7 +43,9 @@ import androidx.compose.ui.unit.sp
 import com.example.novelreader.analyzeRule.Book
 import com.example.novelreader.analyzeRule.BookChapter
 import com.example.novelreader.analyzeRule.ChapterStats
+import com.example.novelreader.analyzeRule.WordCountEstimator
 import com.example.novelreader.analyzeRule.WordCountResolver
+import com.example.novelreader.analyzeRule.WordCountStore
 import com.example.novelreader.analyzeRule.ruleCompletenessOf
 import com.example.novelreader.analyzeRule.sourceMetaLine
 import com.example.novelreader.ui.AppHeader
@@ -95,8 +99,34 @@ fun DetailScreen(
     } else {
         book.chapterCount
     }
-    val wordDisplay = remember(book.wordCount, wcChapterCount, book.altSources) {
-        WordCountResolver.resolve(book.wordCount, wcChapterCount, book.altSources)
+    // 第 52 批 L2：本地估算。
+    // 按「书名 + 作者」持久化 —— 同一本书不管从哪个源进来，共用同一个估算值，
+    // 一个源的问题只付一次代价。只在源值可疑、且本地尚无该书记录时才真正跑抽样。
+    val ctx = LocalContext.current
+    val estimateState = remember(book.name, book.author) {
+        mutableStateOf(WordCountStore.get(ctx, book))
+    }
+    LaunchedEffect(book.name, book.author, wcChapterCount) {
+        val cached = WordCountStore.get(ctx, book)
+        if (cached != null) {
+            estimateState.value = cached
+            return@LaunchedEffect
+        }
+        if (chapters.isEmpty()) return@LaunchedEffect
+        if (!WordCountResolver.needsEstimate(book.wordCount, wcChapterCount)) return@LaunchedEffect
+        val est = WordCountEstimator.estimate(ctx, book, chapters)
+        if (est != null && est > 0L) {
+            WordCountStore.put(ctx, book, est)
+            estimateState.value = est
+        }
+    }
+    val wordDisplay = remember(book.wordCount, wcChapterCount, book.altSources, estimateState.value) {
+        WordCountResolver.resolve(
+            book.wordCount,
+            wcChapterCount,
+            book.altSources,
+            estimateState.value,
+        )
     }
     val wordText = wordDisplay.text
     val statusText = book.status?.takeIf { it.isNotBlank() } ?: inferStatus(book.kind, intro)
