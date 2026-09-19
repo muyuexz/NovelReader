@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.sp
 import com.example.novelreader.analyzeRule.Book
 import com.example.novelreader.analyzeRule.BookChapter
 import com.example.novelreader.analyzeRule.ChapterStats
+import com.example.novelreader.analyzeRule.WordCountResolver
 import com.example.novelreader.analyzeRule.ruleCompletenessOf
 import com.example.novelreader.analyzeRule.sourceMetaLine
 import com.example.novelreader.ui.AppHeader
@@ -86,7 +87,18 @@ fun DetailScreen(
         loading -> "…"
         else -> "—"
     }
-    val wordText = formatWordCount(book.wordCount)
+    // 第 51 批 C-lite：字数展示走「可信度」解析。
+    // 正常源原样显示；仅当「字数 ÷ 章节数」高到像字节数时，才用兄弟源参考值或 ÷3 折算，
+    // 并挂角标说明来源，绝不伪造精确值。原始文本始终保留在 book.wordCount 里。
+    val wcChapterCount = if (chapters.isNotEmpty()) {
+        ChapterStats.realChapterCount(chapters)
+    } else {
+        book.chapterCount
+    }
+    val wordDisplay = remember(book.wordCount, wcChapterCount, book.altSources) {
+        WordCountResolver.resolve(book.wordCount, wcChapterCount, book.altSources)
+    }
+    val wordText = wordDisplay.text
     val statusText = book.status?.takeIf { it.isNotBlank() } ?: inferStatus(book.kind, intro)
     val updateText = remember(chapters) {
         formatTime(chapters.mapNotNull { it.updateTime }.maxOrNull())
@@ -147,7 +159,7 @@ fun DetailScreen(
             ) {
                 Row(Modifier.fillMaxWidth().padding(vertical = 14.dp)) {
                     StatCell("章节数", chapterText, Modifier.weight(1f))
-                    StatCell("总字数", wordText, Modifier.weight(1f))
+                    StatCell("总字数", wordText, Modifier.weight(1f), badge = wordDisplay.badge)
                     StatCell("最近更新", updateText, Modifier.weight(1f))
                 }
             }
@@ -340,11 +352,26 @@ private fun inferStatus(kind: String?, intro: String?): String {
 }
 
 @Composable
-private fun StatCell(label: String, value: String, modifier: Modifier = Modifier) {
+private fun StatCell(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    badge: String? = null,
+) {
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
             text = value,
             style = MaterialTheme.typography.titleMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.height(3.dp))
+        // 第 51 批 C-lite：角标行恒定占位（无角标时是空白），
+        // 保证「章节数 / 总字数 / 最近更新」三个格子高度一致、基线对齐。
+        Text(
+            text = badge ?: " ",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -432,20 +459,5 @@ private fun formatTime(ts: Long?): String {
     }.getOrDefault("未知")
 }
 
-/**
- * 总字数格式化：「5485000」这类纯数字折算成「548.5万」，
- * 已带单位（万/字/W）的文本原样保留，拿不到就回落「未知」。
- */
-private fun formatWordCount(raw: String?): String {
-    val text = raw?.trim().orEmpty()
-    if (text.isEmpty()) return "未知"
-    if (text.any { it == '万' || it == '字' || it == 'W' || it == 'w' }) return text
-    val n = text.filter { it.isDigit() }.toLongOrNull() ?: return text
-    return if (n >= 10_000L) {
-        val w = n / 10_000.0
-        if (w >= 100.0) String.format(java.util.Locale.CHINA, "%.0f万", w)
-        else String.format(java.util.Locale.CHINA, "%.1f万", w)
-    } else {
-        "${n}字"
-    }
-}
+// 第 51 批 C-lite：原 formatWordCount 已迁入 analyzeRule/WordCountResolver.kt，
+// 那里同时负责「字节数嫌疑」判定与降级（多源参考 / ÷3 折算 / 源站自报）。
