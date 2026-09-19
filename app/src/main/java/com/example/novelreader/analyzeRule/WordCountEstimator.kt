@@ -24,7 +24,9 @@ import kotlinx.coroutines.withContext
 object WordCountEstimator {
 
     /** 抽样章数：首 / 中 / 尾均匀取。样本越多越准，流量也越大。 */
-    private const val SAMPLE_SIZE = 4
+    // 第 54 批：4 → 8。样本太少时，首章（短序章）、尾章（短公告/后记）会把
+    // 均值明显拉低（实测「约444万」vs 官方 533 万，矮约 17%），翻倍后波动收敛。
+    private const val SAMPLE_SIZE = 8
 
     /** 至少要有几个成功样本才认为估算可信。 */
     private const val MIN_SAMPLES = 2
@@ -46,19 +48,22 @@ object WordCountEstimator {
         if (real.size < MIN_SAMPLES) return@withContext null
 
         val picks = pick(real, SAMPLE_SIZE)
-        var sum = 0L
-        var ok = 0
+        val lens = ArrayList<Long>(picks.size)
         for (ch in picks) {
             if (!currentCoroutineContext().isActive) break
             val body = fetch(ctx, source, book, ch) ?: continue
             val len = countWords(body)
             if (len <= 0L) continue
-            sum += len
-            ok++
+            lens += len
         }
-        if (ok < MIN_SAMPLES) return@withContext null
+        if (lens.size < MIN_SAMPLES) return@withContext null
 
-        val avg = sum / ok
+        // 第 54 批：均值改「去极值均值（trimmed mean）」——样本够 4 个时，
+        // 先去掉一个最高、一个最低再平均。首/尾取样挑中的短序章、短公告是
+        // 主要低估源，去极值比直接 sum/ok 稳得多，也不会被单个超大章虚高。
+        val sorted = lens.sorted()
+        val used = if (sorted.size >= 4) sorted.subList(1, sorted.size - 1) else sorted
+        val avg = used.sum() / used.size
         val est = avg * real.size
         if (est > 0L) est else null
     }

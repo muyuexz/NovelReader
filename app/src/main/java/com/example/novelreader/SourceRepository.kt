@@ -163,7 +163,7 @@ object SourceRepository {
                                     acc += hits
                                     rankByRelevance(acc, key)
                                         .distinctBy { it.bookUrl }
-                                        .let { aggregate(it) }
+                                        .let { aggregate(it, key) }
                                 }
                                 if (!shouldStop()) onBatch(snapshot)
                             }
@@ -198,7 +198,7 @@ object SourceRepository {
      * 所以《斗破苍穹》与「斗破 苍穹！」不会被拆成两条。
      * 书名为空容不下聚合，直接各自成条，避免把不相关的书搅一起。
      */
-    private fun aggregate(list: List<Book>): List<Book> {
+    private fun aggregate(list: List<Book>, key: String): List<Book> {
         // 每次快照都是全量重排，先清空历史挂载，避免上一轮的兄弟源残留。
         list.forEach { it.altSources = emptyList() }
         val out = ArrayList<Book>()
@@ -246,13 +246,23 @@ object SourceRepository {
                 b.altSources = ordered.filter { it !== b }
             }
         }
-        // 第44批刀A：聚合组按「命中源数量」降序 —— 命中的书源越多，说明越可能是用户
-        // 想找的那本，整组顶到搜索结果第一位。sortedByDescending 是稳定排序：同数量组保持
-        // 原相关性顺序；未成组的单条结果数量为 1，自然沉到底部，列表观感只变「强的更前」。
+        // 第54批刀A（治本）：原先这里只按「命中源数量」降序整体重排（第44批），
+        // 结果「被 30 个源命中的同人泛条目」会踩掉「只 1 个源命中的完全相等正主」——
+        // 精准率被源数量喧宾夺主。现在改成两级键 + 原序兜底（稳定排序）：
+        //   ① 精准率档次（完全相等 → 前缀 → 包含 → 无关）绝对优先，完全相等必置顶；
+        //   ② 同档次内再看命中源数量（多的靠前）；
+        //   ③ 其余保持 rankByRelevance 的既有顺序（下标即序，不抖）。
         val groupSizeOf = HashMap<Int, Int>()
-        for ((key, idx) in slot) groupSizeOf[idx] = groups[key]?.size ?: 1
+        for ((gk, idx) in slot) groupSizeOf[idx] = groups[gk]?.size ?: 1
+        val nk = normalize(key)
         return out.withIndex()
-            .sortedByDescending { (i, _) -> groupSizeOf[i] ?: 1 }
+            .sortedWith(
+                compareBy<IndexedValue<Book>>(
+                    { relevance(it.value.name, nk) },
+                    { -(groupSizeOf[it.index] ?: 1) },
+                    { it.index },
+                )
+            )
             .map { it.value }
     }
 

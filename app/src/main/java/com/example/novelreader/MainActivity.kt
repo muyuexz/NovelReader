@@ -63,6 +63,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -93,6 +94,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -174,6 +176,22 @@ private fun NovelApp(
     // 返回时列表重建只能停在第一条。提到条件链之外，位置才能跨详情页存活。
     // 「新搜索回到顶部」的原有意图不变：发起新搜索时换成全新实例即可。
     var searchListState by remember { mutableStateOf(LazyListState()) }
+    // 第54批：搜索结果「温柔回顶」旗标。
+    // 搜索是分批回填的（onBatch 全量替换 hits），新结果不断插到头部；LazyColumn 带 key
+    // 会锚定旧条目，用户就被「粘」在原位，看着像自动跳了。温柔版：用户没主动划过时，
+    // 每次回填后把列表拉回第一条，保证最准的结果始终露在首屏；一旦用户自己滑过，就不打扰他。
+    var userScrolledSearch by remember { mutableStateOf(false) }
+    // lastAutoScrollAt：记录「我们程序回顶」的时刻。监听器分不清「用户拖动」和
+    // 「我们自己的 scrollToItem」，而程序回顶是瞬时动作——所以滚动开始时刻落在
+    // 最近 400ms 内的，一律归因于我们自己，不算用户划过（布尔瞬时态会被协程延后消费，不可靠）。
+    var lastAutoScrollAt by remember { mutableStateOf(0L) }
+    LaunchedEffect(searchListState) {
+        snapshotFlow { searchListState.isScrollInProgress }.collect { moving ->
+            if (moving && System.currentTimeMillis() - lastAutoScrollAt > 400L) {
+                userScrolledSearch = true
+            }
+        }
+    }
     // 第40批：搜索进度与「停止搜索」。searchStop 是协作式取消标志——
     // 搜索协程每源开工前看一眼，已发出的请求不打断（最多再等 8s 自然超时）。
     var searchDone by remember { mutableStateOf(0) }
@@ -831,6 +849,8 @@ private fun NovelApp(
                                 // 第 28 批：新搜索换一份全新的滚动状态 → 结果必定从第一条开始；
                                 // 从详情页返回不会走这里，位置自然保留。
                                 searchListState = LazyListState()
+                                userScrolledSearch = false
+                                lastAutoScrollAt = 0L
                                 hits = emptyList()
                                 searchStop = false
                                 searchDone = 0
@@ -843,7 +863,19 @@ private fun NovelApp(
                                         key = k,
                                         // 第42批：把设置页选的「搜索书源范围」真正透传下去（默认 500）。
                                         maxSources = searchMaxSources,
-                                        onBatch = { ranked -> if (!searchStop) hits = ranked },
+                                        onBatch = { ranked ->
+                                            if (!searchStop) {
+                                                hits = ranked
+                                                // 第54批：温柔回顶。用户没划过 → 把最准的拉回首屏；
+                                                // 划过 → 尊重他，不动列表。
+                                                if (!userScrolledSearch) {
+                                                    lastAutoScrollAt = System.currentTimeMillis()
+                                                    scope.launch {
+                                                        runCatching { searchListState.scrollToItem(0) }
+                                                    }
+                                                }
+                                            }
+                                        },
                                         onProgress = { d, t ->
                                             searchDone = d
                                             searchTotal = t
