@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -214,6 +215,12 @@ private fun NovelApp(
     var showDetail by remember { mutableStateOf(false) }
     var detailBook by remember { mutableStateOf<Book?>(null) }
     var shelfEntries by remember { mutableStateOf(listOf<ShelfEntry>()) }
+
+    // 第46批：阅读页返回手势的「加入书架」询问。
+    // readerPage = 阅读页当前正文页（1 基；0 = 本页尚未上报）。
+    // askAddShelf 非空 = 弹框在场，内容为待询问的那本书。
+    var readerPage by remember { mutableStateOf(0) }
+    var askAddShelf by remember { mutableStateOf<Book?>(null) }
 
     val refreshShelf: () -> Unit = {
         scope.launch {
@@ -525,18 +532,39 @@ private fun NovelApp(
     // 系统返回（返回手势 / 返回键）接入：与各页左上角按钮走同一套回退逻辑。
     // 层级：正文章 → 详情 → 目录 → 发现页 → 书架 → 退出 App。
     // 只在"还有上一级"的状态下拦截，根页面交还系统。
+    // 第46批：阅读页「返回上一层」的唯一出口。
+    // 手势返回、弹框选「加入书架」/「不用了」、以及返回键关掉询问，最终都从这里离开阅读页，
+    // 免得同一段状态清理逻辑散落多处，日后改一处漏一处。
+    val leaveReader: () -> Unit = {
+        currentChapter = null
+        content = ""
+        showReaderToc = false
+        // 第 7 批第 2 条：从详情页进来的，返回阅读页要回详情页（而不是掉到目录页）
+        if (detailBook != null) showDetail = true
+    }
+
     BackHandler(enabled = openBookNow != null || homeTab != 0) {
         when {
+            // 第46批：询问弹框在场时，返回 = 关掉弹框并继续回上一层（视为不加入）。
+            askAddShelf != null -> {
+                askAddShelf = null
+                leaveReader()
+            }
             // 阅读页的目录浮层优先关掉
             showReaderToc -> {
                 showReaderToc = false
             }
             openChapter != null -> {
-                currentChapter = null
-                content = ""
-                showReaderToc = false
-                // 第 7 批第 2 条：从详情页进来的，返回阅读页要回详情页（而不是掉到目录页）
-                if (detailBook != null) showDetail = true
+                // 第46批：离开阅读页前先看书架里有没有「同名书」（只认书名，书源可以不同）。
+                // 有 → 照旧返回上一层，不打扰；没有 → 拦住这一步，先问一句要不要加入书架。
+                val b = currentBook
+                if (b != null && b.name.isNotBlank() &&
+                    shelfEntries.none { it.name.trim() == b.name.trim() }
+                ) {
+                    askAddShelf = b
+                } else {
+                    leaveReader()
+                }
             }
             showDetail -> {
                 showDetail = false
@@ -647,6 +675,8 @@ private fun NovelApp(
             onSwitchSource = switchSource,
             initialPage = if (resumeTarget?.first == openChapter.url) (resumeTarget?.second ?: 0) else 0,
             onPageChanged = { page ->
+                // 第46批：页号在顶层留一份，供「加入书架」询问写入阅读记忆。
+                if (page > 0) readerPage = page
                 val b = currentBook
                 val src = b?.source
                 if (b != null && src != null && page > 0) {
@@ -992,6 +1022,58 @@ private fun NovelApp(
                 )
             }
         }
+    }
+
+    // 第46批：阅读页返回时「书架里没有同名书」的询问弹框。
+    // 只认书名判重（书源可不同），确认后把「书籍 + 当前书源 + 阅读记忆」一起落盘。
+    val askShelfBook = askAddShelf
+    if (askShelfBook != null) {
+        val askName = askShelfBook.name
+        AlertDialog(
+            onDismissRequest = {
+                // 点遮罩 / 系统返回 = 不加入，照旧离开阅读页。
+                askAddShelf = null
+                leaveReader()
+            },
+            title = { Text("加入书架") },
+            text = {
+                Text(
+                    "书架里还没有《$askName》，要把它加入书架吗？\n\n" +
+                        "会一并记住当前的阅读进度和你正在使用的这个书源。"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val srcUrl = askShelfBook.source?.bookSourceUrl.orEmpty()
+                    // 阅读记忆在离开阅读页前先取快照，弹框关掉后状态就清了。
+                    val ch = openChapter
+                    val pg = readerPage
+                    if (srcUrl.isNotBlank()) {
+                        scope.launch(Dispatchers.IO) {
+                            runCatching {
+                                // 顺序不能反：updateProgress 要求条目已存在，
+                                // 先 add（新增条目）再写进度，否则进度被静默吞掉。
+                                ShelfRepository.add(context, askShelfBook, srcUrl)
+                                if (ch != null) {
+                                    ShelfRepository.updateProgress(
+                                        context, askShelfBook.bookUrl, srcUrl, ch, pg,
+                                    )
+                                }
+                            }
+                            withContext(Dispatchers.Main) { refreshShelf() }
+                        }
+                    }
+                    askAddShelf = null
+                    leaveReader()
+                }) { Text("加入书架") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    askAddShelf = null
+                    leaveReader()
+                }) { Text("不用了") }
+            },
+        )
     }
 }
 
