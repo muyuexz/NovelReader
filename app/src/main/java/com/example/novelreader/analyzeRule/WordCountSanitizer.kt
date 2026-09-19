@@ -85,7 +85,7 @@ object WordCountSanitizer {
         // 610.8万字 / 610万字
         Regex("""([0-9][0-9,，]*(?:\.[0-9]+)?)\s*万字"""),
         // 轻量 JSON 兜底：不含 JSONPath 依赖，避免脆解析
-        Regex(""""(?:wordCount|wordNum|charCount|totalWords|totalCharCount|words?)"\s*:\s*"?([0-9][0-9,，]*\.?[0-9]*)"?""", RegexOption.IGNORE_CASE),
+        Regex(""""(?:wordCount|wordNum|charCount|totalWords|totalCharCount|words?)"\s*:\s*"?([0-9](?:[0-9,，]*[0-9])?(?:\.[0-9]+)?)"?""", RegexOption.IGNORE_CASE),
         // 英文页：word count: 6108292
         Regex("""word\s*count\s*[:：]?\s*([0-9][0-9,，]*(?:\.[0-9]+)?)""", RegexOption.IGNORE_CASE),
     )
