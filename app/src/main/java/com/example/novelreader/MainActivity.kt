@@ -593,7 +593,12 @@ private fun NovelApp(
     val shelfEntryNow = detailNow?.let { b ->
         shelfEntries.firstOrNull { it.bookUrl == b.bookUrl && it.sourceUrl == detailSourceUrl }
     }
-    val inShelf = shelfEntryNow != null
+    // 第47批：详情页「是否已在书架」与阅读页返回链路口径统一——按书名判重（书源不限）。
+    // 否则书架已有同名书（换源版本）时按钮仍显示「加入书架」，一点就多出一本同名书。
+    val sameNameEntry = detailNow?.let { b ->
+        if (b.name.isBlank()) null else shelfEntries.firstOrNull { it.name.trim() == b.name.trim() }
+    }
+    val inShelf = sameNameEntry != null
     // 第12批：续读定位优先按章节 URL 精确匹配；书源刷新后 URL 若有变动导致失配，
     // 用落盘的章节序号（0 基）兜底，最后才回第一章，避免「续读掉回开头」。
     val continueChapter = chapters.firstOrNull { it.url == shelfEntryNow?.lastReadChapterUrl }
@@ -603,7 +608,9 @@ private fun NovelApp(
     val onToggleShelf: () -> Unit = {
         val b = detailNow
         if (b != null && detailSourceUrl.isNotBlank()) {
-            if (inShelf) ShelfRepository.removeBy(context, b.bookUrl, detailSourceUrl)
+            // 第47批：移除时定位「按书名命中的那条真实条目」，避免删错源（同名不同源）。
+            val hit = sameNameEntry
+            if (hit != null) ShelfRepository.removeBy(context, hit.bookUrl, hit.sourceUrl)
             else ShelfRepository.add(context, b, detailSourceUrl)
             refreshShelf()
         }
