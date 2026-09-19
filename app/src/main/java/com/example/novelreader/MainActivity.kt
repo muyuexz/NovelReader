@@ -312,8 +312,9 @@ private fun NovelApp(
     // 第56批：换源弹窗「刷新」——按「书名 + 作者」重跑一次全量聚合，把最新兄弟源
     // 回灌当前书（对象原地更新 + metaTick 驱动弹窗重组），并回写书架快照。
     // 治「书架 → 阅读 → 换源」只有加入书架时那几个源（真机 7 个 vs 搜索页 59 个）。
-    val refreshAltSourcesNow: (Book) -> Unit = { bk ->
+    val refreshAltSourcesNow: (Book, (String) -> Unit) -> Unit = { bk, onDone ->
         scope.launch {
+            val before = bk.altSources.size
             val added = withContext(Dispatchers.IO) {
                 runCatching { SourceRepository.refreshAltSources(bk) }.getOrDefault(0)
             }
@@ -323,9 +324,18 @@ private fun NovelApp(
                     runCatching { ShelfRepository.refreshAltSources(context, bk, srcUrl) }
                 }
             }
-            // 无论成败都推一次 tick：弹窗靠它重建 options，也让「刷新中…」收尾。
+            // 无论成败都推一次 tick：弹窗靠它重建 options。
             prefetchSourceMeta(listOf(bk) + bk.altSources)
             sourceMetaTick++
+            // 第60批刀2（修 Bug②「看不出刷没刷成功」）：把本次刷新的结果显式回传给弹窗，
+            // 由弹窗自己结束「刷新中…」并展示一行结果文案；不再依赖外部 tick 间接复位。
+            val after = bk.altSources.size
+            val msg = when {
+                added <= 0 -> "没找到同名兄弟源，稍后再试"
+                after > before -> "已补齐到 ${after + 1} 个源"
+                else -> "已是最新，共 ${after + 1} 个源"
+            }
+            onDone(msg)
         }
     }
 

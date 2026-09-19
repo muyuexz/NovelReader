@@ -77,7 +77,8 @@ fun DetailScreen(
     // 第 55 批：弹窗打开时把「代表源 + 兄弟源」一次性交给上层批量预取（去重 + 并发限流）。
     onPrefetchMeta: (List<Book>) -> Unit = {},
     // 第 56 批：换源弹窗「刷新」——上层按「书名 + 作者」重跑全量聚合，回灌最新兄弟源。
-    onRefreshAltSources: (Book) -> Unit = {},
+    // 第 60 批刀2：改为带「完成回调」的形式，弹窗自己结束刷新态并展示一行结果文案。
+    onRefreshAltSources: (Book, (String) -> Unit) -> Unit = { _, _ -> },
 ) {
     val scroll = rememberScrollState()
     // 第43批刀C：详情页失败态「换个源试试」的源列表弹窗开关。
@@ -312,7 +313,10 @@ fun DetailScreen(
     // 第43批刀C：源选择弹窗 —— 列出「代表源 + 兄弟源」，选中即交给上层走 switchSource 换源链路。
     if (showSourcePicker.value) {
         // 第 56 批：刷新态。metaTick 变化（聚合收尾）即复位。
+        // 第 60 批刀2（修 Bug①「详情页刷新一直转」）：改为回调驱动 —— 刷新完成即由
+        // onDone 结束「刷新中…」并给出结果文案，不再依赖外部 tick，杜绝永久转圈。
         var refreshing by remember { mutableStateOf(false) }
+        var refreshMsg by remember { mutableStateOf("") }
         LaunchedEffect(metaTick) { refreshing = false }
         // 第 55 批：metaTick 参与——预取完成即重建列表实例，驱动重组刷新元信息。
         val pickList = remember(metaTick, book) { listOf(book) + book.altSources }
@@ -326,7 +330,11 @@ fun DetailScreen(
                         onClick = {
                             if (!refreshing) {
                                 refreshing = true
-                                onRefreshAltSources(book)
+                                refreshMsg = ""
+                                onRefreshAltSources(book) { msg ->
+                                    refreshing = false
+                                    refreshMsg = msg
+                                }
                             }
                         },
                         enabled = !refreshing,
@@ -337,6 +345,14 @@ fun DetailScreen(
             },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
+                    // 第 60 批刀2：刷新结果反馈行。
+                    if (refreshMsg.isNotBlank()) {
+                        Text(
+                            text = refreshMsg,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 12.sp,
+                        )
+                    }
                     pickList.forEach { s ->
                         TextButton(
                             onClick = {

@@ -142,7 +142,8 @@ fun ReaderScreen(
     // 第 55 批：弹窗打开时把「当前源 + 兄弟源」交给上层批量预取，与搜索结果同源同量。
     onPrefetchMeta: (List<Book>) -> Unit = {},
     // 第 56 批：换源弹窗右上角「刷新」——上层按「书名 + 作者」重跑全量聚合，回灌最新兄弟源。
-    onRefreshAltSources: (Book) -> Unit = {},
+    // 第 60 批刀2：改为带「完成回调」的形式，弹窗自己结束刷新态并展示一行结果文案。
+    onRefreshAltSources: (Book, (String) -> Unit) -> Unit = { _, _ -> },
 ) {
     val context = LocalContext.current
     val prefs = remember {
@@ -763,7 +764,10 @@ fun ReaderScreen(
         if (showSwitchSource) {
             val base = book
             // 第 56 批：刷新态。点「刷新」置 true，metaTick 变化（聚合收尾）即复位。
+            // 第 60 批刀2（修 Bug②）：新增 refreshMsg —— 刷新完成后由回调直接结束刷新态
+            // 并展示一行结果文案，用户能明确看到「刷没刷成功、补了几个源」。
             var refreshing by remember { mutableStateOf(false) }
+            var refreshMsg by remember { mutableStateOf("") }
             LaunchedEffect(metaTick) { refreshing = false }
             // 第 55 批：metaTick 参与——预取完成即重建列表实例，驱动弹窗重组刷新元信息。
             val options: List<Book> = remember(metaTick, base) {
@@ -802,7 +806,11 @@ fun ReaderScreen(
                                     onClick = {
                                         if (!refreshing) {
                                             refreshing = true
-                                            onRefreshAltSources(base)
+                                            refreshMsg = ""
+                                            onRefreshAltSources(base) { msg ->
+                                                refreshing = false
+                                                refreshMsg = msg
+                                            }
                                         }
                                     },
                                     enabled = !refreshing,
@@ -814,6 +822,14 @@ fun ReaderScreen(
                                     )
                                 }
                             }
+                        }
+                        // 第 60 批刀2：刷新结果反馈行。
+                        if (refreshMsg.isNotBlank()) {
+                            Text(
+                                text = refreshMsg,
+                                color = palette.sub,
+                                fontSize = 12.sp,
+                            )
                         }
                         Spacer(Modifier.height(4.dp))
                         Text(

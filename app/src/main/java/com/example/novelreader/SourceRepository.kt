@@ -199,7 +199,7 @@ object SourceRepository {
      *
      * @return 补全后的源总数（含自身）；未命中同名同作者组时返回 0，调用方保持原状即可。
      */
-    suspend fun refreshAltSources(book: Book): Int {
+    suspend fun refreshAltSources(book: Book, budgetMs: Long = 26_000L): Int {
         val nameKey = normalize(book.name)
         if (nameKey.isEmpty()) return 0
         val authorKey = normalize(book.author)
@@ -211,7 +211,15 @@ object SourceRepository {
         // 几十个兄弟源覆盖成 2 个（真机「一刷新就剩两个源」的根）。
         // 现在改为「持续取更大的命中组」，并用 onProgress 的已完成计数做稳定窗口：
         // 命中组连续 STABLE_WINDOW 个源不再变大，才认定聚合收敛、收工。
+        // 第60批刀1（修 Bug①「详情页刷新一直转」）：第57批的 stableWindow=64 是「绝对」阈值。
+        // 当本次参与聚合的源总数不足 64 条、或命中组在离末尾不足 64 条处就停止增长时，
+        // `done - lastGrowDone >= 64` 永远不成立 → shouldStop 永不返回 true → 聚合只能
+        // 跑满全部 500 条源 × 每条最坏 8s 超时，弹窗的「刷新中…」迟迟收不了尾。
+        // 双重兜底：① 稳定窗口随 total 缩放（min(64, max(8, total/8))）；
+        //           ② 无论如何不超过 budgetMs 的硬预算，到点即收工，把已有命中组照样回灌。
         val stableWindow = 64
+        val deadline = System.currentTimeMillis() + budgetMs
+        val totalRef = java.util.concurrent.atomic.AtomicInteger(0)
         val groupRef = java.util.concurrent.atomic.AtomicReference<List<Book>?>()
         val doneRef = java.util.concurrent.atomic.AtomicInteger(0)
         val lastGrowDone = java.util.concurrent.atomic.AtomicInteger(0)
@@ -232,10 +240,16 @@ object SourceRepository {
                         }
                     }
                 },
-                onProgress = { d, _ -> doneRef.set(d) },
+                onProgress = { d, t ->
+                    if (t > 0) totalRef.set(t)
+                    doneRef.set(d)
+                },
                 shouldStop = {
-                    groupRef.get() != null &&
-                        doneRef.get() - lastGrowDone.get() >= stableWindow
+                    val t = totalRef.get()
+                    val win = if (t <= 0) stableWindow else minOf(stableWindow, maxOf(8, t / 8))
+                    System.currentTimeMillis() >= deadline ||
+                        (groupRef.get() != null &&
+                            doneRef.get() - lastGrowDone.get() >= win)
                 },
             )
         }
