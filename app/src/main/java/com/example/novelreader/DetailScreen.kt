@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -68,10 +69,20 @@ fun DetailScreen(
     onRead: () -> Unit,
     onRetry: () -> Unit,
     onSwitchSource: (Book) -> Unit,
+    // 第 55 批：换源弹窗元信息「预取完成」信号。兄弟源 status/lastChapter 是异步回填的，
+    // 靠这个自增计数驱动弹窗列表重组，把补好的元信息刷出来。
+    metaTick: Int = 0,
+    // 第 55 批：弹窗打开时把「代表源 + 兄弟源」一次性交给上层批量预取（去重 + 并发限流）。
+    onPrefetchMeta: (List<Book>) -> Unit = {},
 ) {
     val scroll = rememberScrollState()
     // 第43批刀C：详情页失败态「换个源试试」的源列表弹窗开关。
     val showSourcePicker = remember { mutableStateOf(false) }
+    // 第 55 批需求③⑤：弹窗一打开就批量预取兄弟源元信息（status/lastChapter / 章节数），
+    // 让详情页换源与阅读页、搜索结果「同源同量」，不再点开一片空、切换后才补齐。
+    LaunchedEffect(showSourcePicker.value) {
+        if (showSourcePicker.value) onPrefetchMeta(listOf(book) + book.altSources)
+    }
     val lastChapter = book.lastChapter?.takeIf { it.isNotBlank() }
     val intro = remember(book.intro) {
         book.intro
@@ -214,7 +225,21 @@ fun DetailScreen(
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
             ) {
                 Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp)) {
-                    InfoRow("来源", book.originName.takeIf { it.isNotBlank() } ?: "未知")
+                    // 第 55 批需求②：来源行右侧挂「换源」入口，直接打开换源弹窗。
+                    InfoRow(
+                        "来源",
+                        book.originName.takeIf { it.isNotBlank() } ?: "未知",
+                        trailing = if (book.altSources.isNotEmpty()) {
+                            {
+                                TextButton(
+                                    onClick = { showSourcePicker.value = true },
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                ) {
+                                    Text("换源", style = MaterialTheme.typography.labelMedium)
+                                }
+                            }
+                        } else null,
+                    )
                     InfoRow("类型", kinds.joinToString("·").takeIf { it.isNotBlank() } ?: "未知")
                     InfoRow("状态", statusText)
                     InfoRow("最新章节", lastChapter ?: "未知")
@@ -282,7 +307,8 @@ fun DetailScreen(
     }
     // 第43批刀C：源选择弹窗 —— 列出「代表源 + 兄弟源」，选中即交给上层走 switchSource 换源链路。
     if (showSourcePicker.value) {
-        val pickList = listOf(book) + book.altSources
+        // 第 55 批：metaTick 参与——预取完成即重建列表实例，驱动重组刷新元信息。
+        val pickList = remember(metaTick, book) { listOf(book) + book.altSources }
         AlertDialog(
             onDismissRequest = { showSourcePicker.value = false },
             title = { Text("换个源试试") },
@@ -426,8 +452,16 @@ private fun StatCell(
 }
 
 @Composable
-private fun InfoRow(label: String, value: String) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 7.dp)) {
+private fun InfoRow(
+    label: String,
+    value: String,
+    // 第 55 批需求②：右侧可挂一个尾部槽（换源入口等），默认不挂。
+    trailing: (@Composable () -> Unit)? = null,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         Text(
             text = label,
             style = MaterialTheme.typography.bodyMedium,
@@ -441,6 +475,9 @@ private fun InfoRow(label: String, value: String) {
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
+        if (trailing != null) {
+            trailing()
+        }
     }
 }
 

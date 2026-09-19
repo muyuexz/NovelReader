@@ -205,6 +205,10 @@ private fun NovelApp(
     // 同一个对象时 Compose 察觉不到；自增这个版本号，配合 key(detailTick) 强制详情页
     // 重建一次，把「搜索阶段的字数」换成「详情页/目录回填后的字数」。
     var detailTick by remember { mutableStateOf(0) }
+    // 第55批：换源列表元信息「预取完成」信号。刻意不进任何 key(...)——
+    // 它只作参数往下传，靠参数变化触发重组而非重建；一旦进 key 会重置换源弹窗的
+    // 显隐状态与 rememberScrollState，导致弹窗闪关、列表滚回顶部（第43批的教训）。
+    var sourceMetaTick by remember { mutableStateOf(0) }
     var chapters by remember { mutableStateOf(listOf<BookChapter>()) }
     var loadingToc by remember { mutableStateOf(false) }
     var tocError by remember { mutableStateOf<String?>(null) }
@@ -267,6 +271,41 @@ private fun NovelApp(
         refreshSources()
         shelfEntries = withContext(Dispatchers.IO) {
             runCatching { ShelfRepository.all(context) }.getOrDefault(emptyList())
+        }
+    }
+
+    // 第55批：批量预取兄弟源元信息（status / lastChapter）。兄弟源多数只是搜索聚合时
+    // 挂上的「裸壳」——schema 里只有 bookUrl/originName，status、最新章节全空。
+    // 不预取的话，换源弹窗里的目录标题、状态只能靠用户点一次才补一条（需求⑤）；
+    // 书架续读走单源链路（openFromShelf）更是整组都空（需求④）。
+    // 只对「有 source 且 status/lastChapter 有缺项」的源下手，已预取过的记入集合去重。
+    val prefetchedMeta = remember {
+        java.util.Collections.synchronizedSet(mutableSetOf<String>())
+    }
+    val prefetchSourceMeta: (List<Book>) -> Unit = { books ->
+        val todo = books.filter { b ->
+            val s = b.source
+            s != null &&
+                (b.status.isNullOrBlank() || b.lastChapter.isNullOrBlank()) &&
+                prefetchedMeta.add(s.bookSourceUrl + "|" + b.bookUrl)
+        }
+        if (todo.isNotEmpty()) {
+            scope.launch {
+                withContext(Dispatchers.IO) {
+                    val gate = Semaphore(4)
+                    coroutineScope {
+                        todo.map { b ->
+                            async {
+                                gate.withPermit {
+                                    val s = b.source
+                                    if (s != null) runCatching { BookSourceEngine.getBookInfo(s, b) }
+                                }
+                            }
+                        }.awaitAll()
+                    }
+                }
+                sourceMetaTick++
+            }
         }
     }
 
@@ -680,6 +719,8 @@ private fun NovelApp(
                 ChapterStats.lastRealChapter(list)?.title?.takeIf { it.isNotBlank() }?.let { book.lastChapter = it }
             }
             loadingToc = false
+            // 第55批：书架续读同样补齐兄弟源元信息，让阅读页换源弹窗与搜索结果同源同量。
+            prefetchSourceMeta(listOf(book) + book.altSources)
             if (list.isEmpty()) {
                 tocError = "目录解析为空（书源规则不匹配或网络失败）"
             } else {
@@ -710,6 +751,9 @@ private fun NovelApp(
             onCacheLoaded = { url, body -> contentCache[url] = body },
             // 第 26 批：阅读页换源入口回调
             onSwitchSource = switchSource,
+            // 第55批：换源弹窗元信息刷新信号 + 弹窗打开时的批量预取回调。
+            metaTick = sourceMetaTick,
+            onPrefetchMeta = prefetchSourceMeta,
             initialPage = if (resumeTarget?.first == openChapter.url) (resumeTarget?.second ?: 0) else 0,
             onPageChanged = { page ->
                 // 第46批：页号在顶层留一份，供「加入书架」询问写入阅读记忆。
@@ -767,6 +811,9 @@ private fun NovelApp(
                 onRetry = { openBook(openBookNow) },
                 // 第43批刀C：详情页失败态「换个源试试」→ 复用阅读页 switchSource 换源链路。
                 onSwitchSource = switchSource,
+                // 第55批：详情页换源弹窗同口径——元信息刷新信号 + 打开即预取。
+                metaTick = sourceMetaTick,
+                onPrefetchMeta = prefetchSourceMeta,
             )
         }
         openBookNow != null -> TocScreen(

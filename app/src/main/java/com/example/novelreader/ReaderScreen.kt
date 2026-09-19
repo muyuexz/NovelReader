@@ -137,6 +137,10 @@ fun ReaderScreen(
     onCacheLoaded: (String, String) -> Unit = { _, _ -> },
     // 第 26 批：换源——把当前书切到另一个书源继续读（上层重拉目录并定位同章）。
     onSwitchSource: (Book) -> Unit = {},
+    // 第 55 批：换源弹窗元信息「预取完成」信号；兄弟源元信息异步回填，靠它驱动弹窗重组。
+    metaTick: Int = 0,
+    // 第 55 批：弹窗打开时把「当前源 + 兄弟源」交给上层批量预取，与搜索结果同源同量。
+    onPrefetchMeta: (List<Book>) -> Unit = {},
 ) {
     val context = LocalContext.current
     val prefs = remember {
@@ -157,6 +161,14 @@ fun ReaderScreen(
     var showSearch by remember { mutableStateOf(false) }
     // 第 26 批：换源弹窗开关（列同书同作者的各个书源记录）
     var showSwitchSource by remember { mutableStateOf(false) }
+    // 第 55 批需求④⑤：弹窗一打开就批量预取兄弟源元信息。书架续读进来的兄弟源是
+    // 「裸壳重建」（status/lastChapter 全空），不预取就只能显示 "—"，与搜索结果对不上。
+    LaunchedEffect(showSwitchSource) {
+        if (showSwitchSource) {
+            val b = book
+            if (b != null) onPrefetchMeta(listOf(b) + b.altSources)
+        }
+    }
     var cacheFrom by remember { mutableStateOf("") }
     var cacheTo by remember { mutableStateOf("") }
     // 第9批：打开离线缓存弹窗时，默认把范围填成「第一章 ~ 最后一章」。
@@ -748,7 +760,10 @@ fun ReaderScreen(
         // ============================================================
         if (showSwitchSource) {
             val base = book
-            val options: List<Book> = if (base == null) emptyList() else listOf(base) + base.altSources
+            // 第 55 批：metaTick 参与——预取完成即重建列表实例，驱动弹窗重组刷新元信息。
+            val options: List<Book> = remember(metaTick, base) {
+                if (base == null) emptyList() else listOf(base) + base.altSources
+            }
             Box(
                 Modifier
                     .fillMaxSize()
