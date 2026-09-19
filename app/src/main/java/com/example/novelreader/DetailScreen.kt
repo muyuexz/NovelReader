@@ -28,8 +28,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -74,6 +76,8 @@ fun DetailScreen(
     metaTick: Int = 0,
     // 第 55 批：弹窗打开时把「代表源 + 兄弟源」一次性交给上层批量预取（去重 + 并发限流）。
     onPrefetchMeta: (List<Book>) -> Unit = {},
+    // 第 56 批：换源弹窗「刷新」——上层按「书名 + 作者」重跑全量聚合，回灌最新兄弟源。
+    onRefreshAltSources: (Book) -> Unit = {},
 ) {
     val scroll = rememberScrollState()
     // 第43批刀C：详情页失败态「换个源试试」的源列表弹窗开关。
@@ -307,11 +311,30 @@ fun DetailScreen(
     }
     // 第43批刀C：源选择弹窗 —— 列出「代表源 + 兄弟源」，选中即交给上层走 switchSource 换源链路。
     if (showSourcePicker.value) {
+        // 第 56 批：刷新态。metaTick 变化（聚合收尾）即复位。
+        var refreshing by remember { mutableStateOf(false) }
+        LaunchedEffect(metaTick) { refreshing = false }
         // 第 55 批：metaTick 参与——预取完成即重建列表实例，驱动重组刷新元信息。
         val pickList = remember(metaTick, book) { listOf(book) + book.altSources }
         AlertDialog(
             onDismissRequest = { showSourcePicker.value = false },
-            title = { Text("换个源试试") },
+            title = {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("换个源试试", modifier = Modifier.weight(1f))
+                    // 第 56 批需求②：右上角「刷新」——按「书名 + 作者」重跑全量聚合回灌兄弟源。
+                    TextButton(
+                        onClick = {
+                            if (!refreshing) {
+                                refreshing = true
+                                onRefreshAltSources(book)
+                            }
+                        },
+                        enabled = !refreshing,
+                    ) {
+                        Text(if (refreshing) "刷新中…" else "刷新", fontSize = 13.sp)
+                    }
+                }
+            },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
                     pickList.forEach { s ->

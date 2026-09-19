@@ -187,6 +187,56 @@ object SourceRepository {
     }
 
     /**
+     * 第 56 批：按「书名 + 作者」对当前书重跑一次全量聚合，把最新全量兄弟源回灌给 [book]。
+     *
+     * 病根：书架条目落盘的 altSources 只是「加入书架那一刻」的快照（[AltSourceRef] 仅 4 个
+     * 字段），此后用户再导入多少书源、搜索页聚合出多少兄弟源，都不会回写书架。于是
+     * 「书架 → 阅读 → 换源」永远只有加入时那几个源（真机 7 个），与搜索页（59 个）差两个数量级。
+     *
+     * 修法：复用 [search] 这条现成的全量聚合通道——以书名为 key 搜一遍，取回与当前书
+     * 「同名 + 同作者」的那一组，并把它「对称互挂」到 [book] 上（[book] 自身仍在首位）。
+     * 命中目标组即通过 [shouldStop] 提前收工，不必等 500 条源全部跑完。
+     *
+     * @return 补全后的源总数（含自身）；未命中同名同作者组时返回 0，调用方保持原状即可。
+     */
+    suspend fun refreshAltSources(book: Book): Int {
+        val nameKey = normalize(book.name)
+        if (nameKey.isEmpty()) return 0
+        val authorKey = normalize(book.author)
+        val query = book.name.trim().ifBlank { book.author.trim() }
+        if (query.isBlank()) return 0
+        val groupRef = java.util.concurrent.atomic.AtomicReference<List<Book>?>()
+        runCatching {
+            search(
+                key = query,
+                maxSources = 500,
+                onBatch = { batch ->
+                    if (groupRef.get() == null) {
+                        val hit = batch.firstOrNull {
+                            normalize(it.name) == nameKey && normalize(it.author) == authorKey
+                        }
+                        if (hit != null) groupRef.set(listOf(hit) + hit.altSources)
+                    }
+                },
+                shouldStop = { groupRef.get() != null },
+            )
+        }
+        val members = groupRef.get() ?: return 0
+        // 当前书自己的「书源地址 + 书地址」身份，用来把它从兄弟列表里剔掉（避免自己换自己）。
+        val mySourceUrl = book.source?.bookSourceUrl?.takeIf { it.isNotBlank() } ?: book.origin
+        val others = members.filter { m ->
+            val u = m.source?.bookSourceUrl?.takeIf { it.isNotBlank() } ?: m.origin
+            !(u == mySourceUrl && m.bookUrl == book.bookUrl)
+        }
+        if (others.isEmpty()) return 0
+        // 第45批刀D 的口径一并保住：换到任意一个兄弟源，它的 altSources 也必须齐全。
+        val all = listOf(book) + others
+        book.altSources = others
+        for (s in others) s.altSources = all.filter { it !== s }
+        return all.size
+    }
+
+    /**
      * 第 26 批：书名 + 作者聚合。
      *
      * 同一本书会在多个书源里各搜到一条，书源不同则 [Book.bookUrl] 不同，

@@ -141,6 +141,8 @@ fun ReaderScreen(
     metaTick: Int = 0,
     // 第 55 批：弹窗打开时把「当前源 + 兄弟源」交给上层批量预取，与搜索结果同源同量。
     onPrefetchMeta: (List<Book>) -> Unit = {},
+    // 第 56 批：换源弹窗右上角「刷新」——上层按「书名 + 作者」重跑全量聚合，回灌最新兄弟源。
+    onRefreshAltSources: (Book) -> Unit = {},
 ) {
     val context = LocalContext.current
     val prefs = remember {
@@ -760,6 +762,9 @@ fun ReaderScreen(
         // ============================================================
         if (showSwitchSource) {
             val base = book
+            // 第 56 批：刷新态。点「刷新」置 true，metaTick 变化（聚合收尾）即复位。
+            var refreshing by remember { mutableStateOf(false) }
+            LaunchedEffect(metaTick) { refreshing = false }
             // 第 55 批：metaTick 参与——预取完成即重建列表实例，驱动弹窗重组刷新元信息。
             val options: List<Book> = remember(metaTick, base) {
                 if (base == null) emptyList() else listOf(base) + base.altSources
@@ -780,7 +785,36 @@ fun ReaderScreen(
                         .fillMaxWidth(),
                 ) {
                     Column(Modifier.padding(18.dp)) {
-                        Text("切换书源", color = palette.fg, fontSize = 16.sp)
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "切换书源",
+                                color = palette.fg,
+                                fontSize = 16.sp,
+                                modifier = Modifier.weight(1f),
+                            )
+                            // 第 56 批需求②：右上角「刷新」——按「书名 + 作者」重跑全量聚合，
+                            // 把最新兄弟源回灌当前书并回写书架快照，治「只有加入书架时那几个源」。
+                            if (base != null) {
+                                TextButton(
+                                    onClick = {
+                                        if (!refreshing) {
+                                            refreshing = true
+                                            onRefreshAltSources(base)
+                                        }
+                                    },
+                                    enabled = !refreshing,
+                                ) {
+                                    Text(
+                                        text = if (refreshing) "刷新中…" else "刷新",
+                                        color = palette.sub,
+                                        fontSize = 13.sp,
+                                    )
+                                }
+                            }
+                        }
                         Spacer(Modifier.height(4.dp))
                         Text(
                             text = (base?.name ?: "").ifBlank { "当前书籍" } +

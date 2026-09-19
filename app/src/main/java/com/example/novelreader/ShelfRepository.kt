@@ -277,6 +277,32 @@ object ShelfRepository {
         persist(context)
     }
 
+    /**
+     * 第 56 批：把「重新聚合后的全量兄弟源」回写书架快照。
+     *
+     * [refreshMeta] 只刷元数据、不碰 altSources，于是书架里存的兄弟源永远是
+     * 「加入书架那一刻」的快照——这正是「书架换源永远只有几个源」的根。
+     * 换源弹窗「刷新」成功后调用本方法，把最新全量兄弟源落盘，
+     * 之后再从书架进来就是全量（一次刷新，长期生效）。
+     *
+     * 只在源数量变多时写：避免某次不完整的聚合把已有兄弟源写缩水。
+     */
+    @Synchronized
+    fun refreshAltSources(context: Context, book: Book, sourceUrl: String) {
+        val cur = ensureLoaded(context).toMutableList()
+        val i = cur.indexOfFirst { it.bookUrl == book.bookUrl && it.sourceUrl == sourceUrl }
+        if (i < 0) return
+        val refs = book.altSources.mapNotNull { s ->
+            val u = s.source?.bookSourceUrl?.takeIf { it.isNotBlank() }
+                ?: s.origin.takeIf { it.isNotBlank() }
+            if (u.isNullOrBlank()) null else AltSourceRef(u, s.bookUrl, s.tocUrl, s.originName)
+        }
+        if (refs.isEmpty() || refs.size <= cur[i].altSources.size) return
+        cur[i] = cur[i].copy(altSources = refs)
+        cache = cur
+        persist(context)
+    }
+
     private fun persist(context: Context) {
         runCatching {
             prefs(context).edit()

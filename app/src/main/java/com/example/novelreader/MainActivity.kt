@@ -309,6 +309,26 @@ private fun NovelApp(
         }
     }
 
+    // 第56批：换源弹窗「刷新」——按「书名 + 作者」重跑一次全量聚合，把最新兄弟源
+    // 回灌当前书（对象原地更新 + metaTick 驱动弹窗重组），并回写书架快照。
+    // 治「书架 → 阅读 → 换源」只有加入书架时那几个源（真机 7 个 vs 搜索页 59 个）。
+    val refreshAltSourcesNow: (Book) -> Unit = { bk ->
+        scope.launch {
+            val added = withContext(Dispatchers.IO) {
+                runCatching { SourceRepository.refreshAltSources(bk) }.getOrDefault(0)
+            }
+            if (added > 1) {
+                val srcUrl = bk.source?.bookSourceUrl?.takeIf { it.isNotBlank() } ?: bk.origin
+                withContext(Dispatchers.IO) {
+                    runCatching { ShelfRepository.refreshAltSources(context, bk, srcUrl) }
+                }
+            }
+            // 无论成败都推一次 tick：弹窗靠它重建 options，也让「刷新中…」收尾。
+            prefetchSourceMeta(listOf(bk) + bk.altSources)
+            sourceMetaTick++
+        }
+    }
+
     // 打开某本书 → 拉取目录
     val openBook: (Book) -> Unit = { book ->
         currentBook = book
@@ -754,6 +774,8 @@ private fun NovelApp(
             // 第55批：换源弹窗元信息刷新信号 + 弹窗打开时的批量预取回调。
             metaTick = sourceMetaTick,
             onPrefetchMeta = prefetchSourceMeta,
+            // 第56批：换源弹窗右上角「刷新」——重跑全量聚合回写书架快照。
+            onRefreshAltSources = refreshAltSourcesNow,
             initialPage = if (resumeTarget?.first == openChapter.url) (resumeTarget?.second ?: 0) else 0,
             onPageChanged = { page ->
                 // 第46批：页号在顶层留一份，供「加入书架」询问写入阅读记忆。
@@ -814,6 +836,8 @@ private fun NovelApp(
                 // 第55批：详情页换源弹窗同口径——元信息刷新信号 + 打开即预取。
                 metaTick = sourceMetaTick,
                 onPrefetchMeta = prefetchSourceMeta,
+                // 第56批：详情页换源弹窗右上角「刷新」。
+                onRefreshAltSources = refreshAltSourcesNow,
             )
         }
         openBookNow != null -> TocScreen(
