@@ -246,7 +246,14 @@ object SourceRepository {
                 b.altSources = ordered.filter { it !== b }
             }
         }
-        return out
+        // 第44批刀A：聚合组按「命中源数量」降序 —— 命中的书源越多，说明越可能是用户
+        // 想找的那本，整组顶到搜索结果第一位。sortedByDescending 是稳定排序：同数量组保持
+        // 原相关性顺序；未成组的单条结果数量为 1，自然沉到底部，列表观感只变「强的更前」。
+        val groupSizeOf = HashMap<Int, Int>()
+        for ((key, idx) in slot) groupSizeOf[idx] = groups[key]?.size ?: 1
+        return out.withIndex()
+            .sortedByDescending { (i, _) -> groupSizeOf[i] ?: 1 }
+            .map { it.value }
     }
 
     /**

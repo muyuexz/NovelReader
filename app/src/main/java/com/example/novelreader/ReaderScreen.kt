@@ -73,6 +73,8 @@ import androidx.compose.ui.zIndex
 import com.example.novelreader.analyzeRule.Book
 import com.example.novelreader.analyzeRule.BookChapter
 import com.example.novelreader.analyzeRule.BookSourceEngine
+import com.example.novelreader.analyzeRule.ruleCompletenessOf
+import com.example.novelreader.analyzeRule.sourceMetaLine
 import com.example.novelreader.ui.ReaderPalette
 import com.example.novelreader.ui.TagPill
 import kotlinx.coroutines.Dispatchers
@@ -767,7 +769,9 @@ fun ReaderScreen(
                         Spacer(Modifier.height(4.dp))
                         Text(
                             text = (base?.name ?: "").ifBlank { "当前书籍" } +
-                                (base?.author?.takeIf { it.isNotBlank() }?.let { " · " + it } ?: ""),
+                                (base?.author?.takeIf { it.isNotBlank() }?.let { " · " + it } ?: "") +
+                                // 第44批需求④：标题副行补上「可选源数量」，心里有数。
+                                (if (options.size > 1) " · ${options.size} 个源可选" else ""),
                             color = palette.sub,
                             fontSize = 12.sp,
                             maxLines = 1,
@@ -812,6 +816,10 @@ fun ReaderScreen(
                                                 modifier = Modifier.weight(1f),
                                             )
                                             if (cur) TagPill("当前", color = palette.sub)
+                                            // 第44批需求④：非当前、且规则完备度最高（有目录+详情）的源给「推荐」标记。
+                                            else if (ruleCompletenessOf(opt.source) == 0) {
+                                                TagPill("推荐", color = palette.fg)
+                                            }
                                         }
                                         Spacer(Modifier.height(3.dp))
                                         Text(
@@ -822,6 +830,15 @@ fun ReaderScreen(
                                             ).joinToString(" · ").ifBlank { "—" },
                                             color = palette.sub,
                                             fontSize = 12.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        // 第44批需求④：补一行「域名 · 章节数 · 规则完备度」，选源前有据可依。
+                                        Spacer(Modifier.height(2.dp))
+                                        Text(
+                                            text = sourceMetaLine(opt),
+                                            color = palette.sub.copy(alpha = 0.75f),
+                                            fontSize = 10.sp,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
                                         )

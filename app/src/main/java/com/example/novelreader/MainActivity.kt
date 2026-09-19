@@ -274,6 +274,13 @@ private fun NovelApp(
                 book.source = winner.source
                 book.bookUrl = winner.bookUrl
                 if (winner.tocUrl.isNotBlank()) book.tocUrl = winner.tocUrl
+                // 第44批刀C：「两个当前」根治 —— 搬回字段后代表书与残留的 winner 对象
+                // 「书地址 + 书源」完全重合，换源弹窗会把两条都判成当前源。这里把与代表书
+                // 身份相同的兄弟源剔掉，保证弹窗里当前源唯一。
+                book.altSources = book.altSources.filter {
+                    !(it.bookUrl == book.bookUrl &&
+                        it.source?.bookSourceUrl == book.source?.bookSourceUrl)
+                }
             }
             chapters = list
             if (list.isNotEmpty()) {
@@ -453,7 +460,7 @@ private fun NovelApp(
         showReaderToc = false
         loadingToc = true
         scope.launch {
-            // 第43批刀B：阅读页换源同样走多源竞速 —— 用户指定的 nb 优先，
+            // 第43批刀B（第44批升级为评优）：阅读页换源同样走多源取数评优 —— 用户指定的 nb 优先，
             // 它不出目录时自动在兄弟源里兜底，不让「换源失败」再逼用户手点一次。
             val candidates = listOf(nb) + nb.altSources
             val res = ChapterResolver.resolve(
@@ -476,6 +483,13 @@ private fun NovelApp(
                 nb.source = winner.source
                 nb.bookUrl = winner.bookUrl
                 if (winner.tocUrl.isNotBlank()) nb.tocUrl = winner.tocUrl
+                // 第44批刀C：「两个当前」根治（阅读页换源侧）。
+                // 字段搬回后 nb 的身份已与 winner 合一，但 nb.altSources 里仍残留 winner
+                // 原对象（bookUrl + 书源 完全相同），换源弹窗会把两者双双判定成「当前」。
+                // 按身份指纹剔除与代表书相同的兄弟源。
+                nb.altSources = nb.altSources.filter {
+                    !(it.bookUrl == nb.bookUrl && it.source?.bookSourceUrl == nb.source?.bookSourceUrl)
+                }
             }
             chapters = list
             if (list.isEmpty()) {

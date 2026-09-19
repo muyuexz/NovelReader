@@ -41,6 +41,8 @@ import androidx.compose.ui.unit.sp
 import com.example.novelreader.analyzeRule.Book
 import com.example.novelreader.analyzeRule.BookChapter
 import com.example.novelreader.analyzeRule.ChapterStats
+import com.example.novelreader.analyzeRule.ruleCompletenessOf
+import com.example.novelreader.analyzeRule.sourceMetaLine
 import com.example.novelreader.ui.AppHeader
 import com.example.novelreader.ui.TagPill
 import coil.compose.AsyncImage
@@ -241,7 +243,47 @@ fun DetailScreen(
                             },
                             modifier = Modifier.fillMaxWidth(),
                         ) {
-                            Text(s.originName.takeIf { it.isNotBlank() } ?: "未知来源")
+                            // 第44批需求④：详情页弹窗不再只甩一个源名 —— 补「当前/推荐」标记、
+                            // 状态与最新章节、以及「域名 · 章节数 · 规则完备度」元信息。
+                            val cur = s === book ||
+                                (s.bookUrl == book.bookUrl &&
+                                    s.source?.bookSourceUrl == book.source?.bookSourceUrl)
+                            Column(Modifier.fillMaxWidth()) {
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = s.originName.takeIf { it.isNotBlank() } ?: "未知来源",
+                                        modifier = Modifier.weight(1f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    when {
+                                        cur -> TagPill("当前")
+                                        ruleCompletenessOf(s.source) == 0 -> TagPill("推荐")
+                                    }
+                                }
+                                Spacer(Modifier.height(2.dp))
+                                Text(
+                                    text = listOfNotNull(
+                                        s.status?.takeIf { it.isNotBlank() },
+                                        s.lastChapter?.takeIf { it.isNotBlank() }
+                                            ?.let { "最新 " + it },
+                                    ).joinToString(" · ").ifBlank { "—" },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = sourceMetaLine(s),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
                         }
                     }
                 }
