@@ -137,10 +137,14 @@ object BookSourceEngine {
             rule.getString(rbi.author).takeIf { it.isNotBlank() }?.let { book.author = it }
             rule.getString(rbi.kind).takeIf { it.isNotBlank() }?.let { book.kind = it }
             rule.getString(rbi.intro).takeIf { it.isNotBlank() }?.let { book.intro = it }
-            // 第48批刀B（详情路径）：同样清洗。位置型规则（dd span.3@text / tag.td.3@text 一类）
-            // 页面结构一变就抓到日期/ID 数字串，旧逻辑直接落库 → 详情页把 "2019-05-01"
-            // 抠成 20190501 显示成「2019.1万」。清洗后为 null 时保留搜索阶段已校验过的值。
-            WordCountSanitizer.sanitize(rule.getString(rbi.wordCount))?.let { book.wordCount = it }
+            // 第48批刀B（详情路径）：清洗位置型规则抓到的日期/ID 脏值。
+            // 第49批刀A：清洗为空时启用「整页锚定兜底」——治两类结构性未知：
+            //   ① 74.4% 的源根本没有 wordCount 规则；
+            //   ② 规则与页面形态错配（JSON 接口源写了 CSS 规则，如阅友小说字段是 words）。
+            // 兜底只认「字数/万字/wordCount/words」锚词附近的数字，并经 sanitize 复检。
+            val wcByRule = WordCountSanitizer.sanitize(rule.getString(rbi.wordCount))
+            val wcFinal = wcByRule ?: WordCountSanitizer.extractFromPage(body, body.isJson())
+            wcFinal?.let { book.wordCount = it }
             rule.getString(rbi.lastChapter).takeIf { it.isNotBlank() }?.let { book.lastChapter = it }
             rule.getString(rbi.status).takeIf { it.isNotBlank() }?.let { book.status = it }
             // 第34批：同样防「空规则回落成详情页 URL」的伪封面。

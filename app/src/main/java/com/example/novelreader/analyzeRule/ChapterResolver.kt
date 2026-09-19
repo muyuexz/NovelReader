@@ -104,7 +104,20 @@ object ChapterResolver {
         scope.cancel()
         val pool = synchronized(results) { results.toList() }
         // 评优：分高者胜；同分保留更靠前的候选（候选序 = 优先级），maxByOrNull 天然保先。
-        pool.maxByOrNull { score(it.book, it.chapters) }
+        val winner = pool.maxByOrNull { score(it.book, it.chapters) } ?: return@withContext null
+
+        // 第49批刀B：字段级交叉补全。
+        // 背景：本解析器按「整本书」择优，胜出源的强项可能是目录，弱项却是字数。
+        // 于是「章节多的缺字数源」会把「有字数但章节少的源」顶掉，UI 显示赢家的空字数 → 未知。
+        // 既然兄弟源的结果都已在池里，就没理由丢弃它们的有效字段：胜出源缺字数时，
+        // 从池内其他成功候选里挑第一条非空（均已过 WordCountSanitizer 清洗）补上。
+        if (winner.book.wordCount.isNullOrBlank()) {
+            pool.asSequence()
+                .map { it.book.wordCount }
+                .firstOrNull { !it.isNullOrBlank() }
+                ?.let { winner.book.wordCount = it }
+        }
+        winner
     }
 
     /**
@@ -126,7 +139,9 @@ object ChapterResolver {
         if (!book.coverUrl.isNullOrBlank()) s += 6
         if (!book.kind.isNullOrBlank()) s += 4
         if (!book.status.isNullOrBlank()) s += 3
-        if (!book.wordCount.isNullOrBlank()) s += 3
+        // 第49批刀B：字数从 +3 提到 +8 —— 详情页「总字数」是用户可直接感知的名片字段，
+        // 旧权重下「章节多的缺字数源」几乎必然压过「有字数的源」，与刀B的交叉补全形成双保险。
+        if (!book.wordCount.isNullOrBlank()) s += 8
         s += minOf(chapters.size, 300) / 10
         s += (src?.weight ?: 0) / 5
         return s
