@@ -791,10 +791,10 @@ fun ReaderScreen(
                                     items = options,
                                     key = { i, b -> "ss-" + i + "-" + b.bookUrl + "@" + b.originName },
                                 ) { i, opt ->
-                                    // 第 27 批：当前源按「书地址 + 书源」判定，不再硬编码首条。
-                                    val cur = base != null &&
-                                        opt.bookUrl == base.bookUrl &&
-                                        opt.source?.bookSourceUrl == base.source?.bookSourceUrl
+                                    // 第45批刀C：当前源改按「对象身份」判定 —— 胜出源以对象替换
+                                    // 成为当前书，不再有字段搬回造成的身份重合，也不会让字段相等的
+                                    // 兄弟源被误标成「当前」。base 自身是 options 首项，恒判当前。
+                                    val cur = base != null && opt === base
                                     Column(
                                         Modifier
                                             .fillMaxWidth()

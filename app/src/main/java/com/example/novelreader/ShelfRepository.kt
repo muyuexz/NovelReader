@@ -80,7 +80,10 @@ data class ShelfEntry(
         bk.source = source
         // 第 27 批：兄弟源一并还原，否则「从书架进入阅读页」也只看到 1 个源。
         // 查不到书源对象（源被删）的兄弟直接丢弃，避免换源点下去静默失败。
-        bk.altSources = altSources.mapNotNull { ref ->
+        // 第45批刀D：先重建全部兄弟源，再「对称互挂」。
+        // 只给 bk 挂兄弟表的话，一旦换源把 currentBook 换成某个兄弟对象，
+        // 它的 altSources 是空的，换源列表会瞬间缩成 1 条。
+        val siblings = altSources.mapNotNull { ref ->
             val s = resolveSource(ref.sourceUrl) ?: return@mapNotNull null
             Book(
                 bookUrl = ref.bookUrl,
@@ -91,6 +94,9 @@ data class ShelfEntry(
                 originName = ref.originName,
             ).also { it.source = s }
         }
+        bk.altSources = siblings
+        val allSources = listOf(bk) + siblings
+        for (s in siblings) s.altSources = allSources.filter { it !== s }
     }
 
     companion object {

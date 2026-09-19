@@ -259,9 +259,15 @@ private fun NovelApp(
             )
             val winner = res?.book
             val list = res?.chapters ?: emptyList()
-            // 胜出源若不是当前代表，把它的详情字段搬回代表书并静默顶替 ——
-            // 详情页名片、后续正文取数、书架刷新都跟着走这条真正能用的源，用户无感。
+            // 第45批刀A：「对象替换」取代「就地改写字段」。
+            // 旧逻辑把胜出源的身份字段搬回代表书，副作用有二：① 代表书被改造成胜出源，
+            // 换源弹窗「当前」标记跟着漂移，用户误以为没换；② 为压掉由此产生的重复项，
+            // 刀C 会 filter 掉一条兄弟源 → 源列表每换一次少一个。现在胜出源直接成为当前书
+            // 对象本身，身份字段零改写、兄弟表零删除，两个病一起除根。
+            // 仅把「展示用元数据」回灌给代表书（供 refreshMeta 落盘），身份字段一律不碰。
+            val effective = winner ?: book
             if (winner != null && winner !== book) {
+                currentBook = winner
                 if (winner.name.isNotBlank()) book.name = winner.name
                 if (winner.author.isNotBlank()) book.author = winner.author
                 if (!winner.intro.isNullOrBlank()) book.intro = winner.intro
@@ -270,24 +276,16 @@ private fun NovelApp(
                 if (!winner.kind.isNullOrBlank()) book.kind = winner.kind
                 if (!winner.wordCount.isNullOrBlank()) book.wordCount = winner.wordCount
                 if (winner.originName.isNotBlank()) book.originName = winner.originName
-                if (winner.origin.isNotBlank()) book.origin = winner.origin
-                book.source = winner.source
-                book.bookUrl = winner.bookUrl
-                if (winner.tocUrl.isNotBlank()) book.tocUrl = winner.tocUrl
-                // 第44批刀C：「两个当前」根治 —— 搬回字段后代表书与残留的 winner 对象
-                // 「书地址 + 书源」完全重合，换源弹窗会把两条都判成当前源。这里把与代表书
-                // 身份相同的兄弟源剔掉，保证弹窗里当前源唯一。
-                book.altSources = book.altSources.filter {
-                    !(it.bookUrl == book.bookUrl &&
-                        it.source?.bookSourceUrl == book.source?.bookSourceUrl)
-                }
             }
             chapters = list
             if (list.isNotEmpty()) {
                 // 目录抓全后回填真实章节数与最新章节，
                 // 修正书源搜索规则里可能过时/错误的 lastChapter（如只给到第 81 章）。
-                book.chapterCount = ChapterStats.realChapterCount(list)
-                ChapterStats.lastRealChapter(list)?.title?.takeIf { it.isNotBlank() }?.let { book.lastChapter = it }
+                effective.chapterCount = ChapterStats.realChapterCount(list)
+                ChapterStats.lastRealChapter(list)?.title?.takeIf { it.isNotBlank() }?.let {
+                    effective.lastChapter = it
+                    if (effective !== book) book.lastChapter = it
+                }
             }
             if (list.isEmpty()) {
                 tocError = if (candidates.size > 1) {
@@ -460,45 +458,55 @@ private fun NovelApp(
         showReaderToc = false
         loadingToc = true
         scope.launch {
-            // 第43批刀B（第44批升级为评优）：阅读页换源同样走多源取数评优 —— 用户指定的 nb 优先，
-            // 它不出目录时自动在兄弟源里兜底，不让「换源失败」再逼用户手点一次。
+            // 第45批刀B：换源场景「尊重用户点击」。旧实现把 nb 和全部兄弟源一起评优，
+            // 分数更高的兄弟源会把用户点的那条顶掉 —— 用户点了「玄幻阁网」，实际生效的
+            // 却是「QQ阅读」，换源弹窗「当前」自然不动，看起来就像根本没换成功。
+            // 现在改两步：先只解析用户点选的 nb；它出不了目录，才降级到兄弟源兜底。
             val candidates = listOf(nb) + nb.altSources
-            val res = ChapterResolver.resolve(
-                candidates = candidates,
+            val primary = ChapterResolver.resolve(
+                candidates = listOf(nb),
                 concurrency = 6,
                 perCandidateTimeoutMs = 10_000L,
             )
+            val res = if (primary != null && primary.chapters.isNotEmpty()) {
+                primary
+            } else {
+                ChapterResolver.resolve(
+                    candidates = nb.altSources,
+                    concurrency = 6,
+                    perCandidateTimeoutMs = 10_000L,
+                )
+            }
             val winner = res?.book
             val list = res?.chapters ?: emptyList()
-            if (winner != null && winner !== nb) {
-                if (winner.name.isNotBlank()) nb.name = winner.name
-                if (winner.author.isNotBlank()) nb.author = winner.author
-                if (!winner.intro.isNullOrBlank()) nb.intro = winner.intro
-                if (!winner.coverUrl.isNullOrBlank()) nb.coverUrl = winner.coverUrl
-                if (!winner.status.isNullOrBlank()) nb.status = winner.status
-                if (!winner.kind.isNullOrBlank()) nb.kind = winner.kind
-                if (!winner.wordCount.isNullOrBlank()) nb.wordCount = winner.wordCount
-                if (winner.originName.isNotBlank()) nb.originName = winner.originName
-                if (winner.origin.isNotBlank()) nb.origin = winner.origin
-                nb.source = winner.source
-                nb.bookUrl = winner.bookUrl
-                if (winner.tocUrl.isNotBlank()) nb.tocUrl = winner.tocUrl
-                // 第44批刀C：「两个当前」根治（阅读页换源侧）。
-                // 字段搬回后 nb 的身份已与 winner 合一，但 nb.altSources 里仍残留 winner
-                // 原对象（bookUrl + 书源 完全相同），换源弹窗会把两者双双判定成「当前」。
-                // 按身份指纹剔除与代表书相同的兄弟源。
-                nb.altSources = nb.altSources.filter {
-                    !(it.bookUrl == nb.bookUrl && it.source?.bookSourceUrl == nb.source?.bookSourceUrl)
+            // 命中即「对象替换」：胜出源直接成为当前书，身份字段零改写、兄弟表零删除。
+            if (winner != null) {
+                currentBook = winner
+                // 仅把「展示用元数据」回灌给 nb（书架条目沿用 nb 的身份），身份字段一律不碰。
+                if (winner !== nb) {
+                    if (winner.name.isNotBlank()) nb.name = winner.name
+                    if (winner.author.isNotBlank()) nb.author = winner.author
+                    if (!winner.intro.isNullOrBlank()) nb.intro = winner.intro
+                    if (!winner.coverUrl.isNullOrBlank()) nb.coverUrl = winner.coverUrl
+                    if (!winner.status.isNullOrBlank()) nb.status = winner.status
+                    if (!winner.kind.isNullOrBlank()) nb.kind = winner.kind
+                    if (!winner.wordCount.isNullOrBlank()) nb.wordCount = winner.wordCount
+                    if (winner.originName.isNotBlank()) nb.originName = winner.originName
+                    if (!winner.lastChapter.isNullOrBlank()) nb.lastChapter = winner.lastChapter
                 }
             }
+            val effective = winner ?: nb
             chapters = list
             if (list.isEmpty()) {
                 tocError = "换源失败：目录解析为空（已尝试 ${candidates.size} 个源）"
                 loadingToc = false
                 return@launch
             }
-            nb.chapterCount = ChapterStats.realChapterCount(list)
-            ChapterStats.lastRealChapter(list)?.title?.takeIf { it.isNotBlank() }?.let { nb.lastChapter = it }
+            effective.chapterCount = ChapterStats.realChapterCount(list)
+            ChapterStats.lastRealChapter(list)?.title?.takeIf { it.isNotBlank() }?.let {
+                effective.lastChapter = it
+                if (effective !== nb) nb.lastChapter = it
+            }
             loadingToc = false
             resumeTarget = null
             val target = list.firstOrNull { it.title == anchorTitle && !anchorTitle.isNullOrBlank() }
