@@ -128,6 +128,17 @@ fun DetailScreen(
             estimateState.value,
         )
     }
+    // 第 53 批：源值可疑、本地估算尚未就绪时，先挂「校验中…」角标，
+    // 避免一个明显偏小的脏值在估算返回前被用户当成定论。
+    val wordBadge = if (
+        chapters.isNotEmpty() &&
+        estimateState.value == null &&
+        WordCountResolver.needsEstimate(book.wordCount, wcChapterCount)
+    ) {
+        "校验中…"
+    } else {
+        wordDisplay.badge
+    }
     val wordText = wordDisplay.text
     val statusText = book.status?.takeIf { it.isNotBlank() } ?: inferStatus(book.kind, intro)
     val updateText = remember(chapters) {
@@ -189,7 +200,7 @@ fun DetailScreen(
             ) {
                 Row(Modifier.fillMaxWidth().padding(vertical = 14.dp)) {
                     StatCell("章节数", chapterText, Modifier.weight(1f))
-                    StatCell("总字数", wordText, Modifier.weight(1f), badge = wordDisplay.badge)
+                    StatCell("总字数", wordText, Modifier.weight(1f), badge = wordBadge)
                     StatCell("最近更新", updateText, Modifier.weight(1f))
                 }
             }
