@@ -206,6 +206,8 @@ object SourceRepository {
         // 第 26 批的缺陷：只有代表书挂上了兄弟表，用户一旦换源切到非代表书，
         // 新 currentBook 的 altSources 是空的，换源弹窗就只剩它自己。
         val groups = LinkedHashMap<String, MutableList<Book>>()
+        // 第43批刀A：记录每组的「占位下标」，让代表能在 out 里原地换成规则最完备的那条。
+        val slot = HashMap<String, Int>()
         for (b in list) {
             val n = normalize(b.name)
             if (n.isEmpty()) {
@@ -214,23 +216,60 @@ object SourceRepository {
             }
             val key = n + "\u0001" + normalize(b.author)
             val g = groups.getOrPut(key) { ArrayList() }
-            if (g.isEmpty()) out += b
+            if (g.isEmpty()) {
+                // 第43批刀A：记下这组在 out 里的占位位置，稍后可原地换成最优代表。
+                slot[key] = out.size
+                out += b
+            }
             g += b
         }
         // 同组每个成员都能看到「除自己以外的全部兄弟源」，换到哪一本都列得全。
-        for (g in groups.values) {
+        for ((key, g) in groups) {
             if (g.size <= 1) continue
+            // 第43批刀A（治本）：组内先按「规则完备度」稳定排序，让真能出目录的源优先当代表。
+            // sortedBy 是稳定排序：同一档内保持原相关性顺序，所以只把代表顶上去，
+            // 代表仍占据该组在 out 中的原下标 —— 列表观感与既有排序键完全不变。
+            val ordered = g.sortedBy { ruleCompleteness(it.source) }
+            val rep = ordered.first()
+            val holder = g[0]
+            if (rep !== holder) {
+                val idx = slot[key]
+                if (idx != null && idx in out.indices) out[idx] = rep
+            }
             // 第34批：代表条目封面为空时，从同组兄弟源取第一个可用封面回填。
             // 多源里只要有任意一个源给了封面，列表这条就不会秃着。
-            val cover = g.firstOrNull { !it.coverUrl.isNullOrBlank() }?.coverUrl
+            val cover = ordered.firstOrNull { !it.coverUrl.isNullOrBlank() }?.coverUrl
             if (cover != null) {
-                for (b in g) if (b.coverUrl.isNullOrBlank()) b.coverUrl = cover
+                for (b in ordered) if (b.coverUrl.isNullOrBlank()) b.coverUrl = cover
             }
-            for (b in g) {
-                b.altSources = g.filter { it !== b }
+            for (b in ordered) {
+                b.altSources = ordered.filter { it !== b }
             }
         }
         return out
+    }
+
+    /**
+     * 第43批刀A：书源「规则完备度」档位，数值越小越该当聚合代表。
+     *
+     * 背景：聚合代表原先只看 `rankByRelevance` 的相关性排序，压根不看这个源
+     * 有没有目录 / 详情规则。结果只要代表源是个「有搜索规则、缺 ruleToc」的残源，
+     * 整组 32 个兄弟源在详情页就形同虚设（目录解析为空、封面作者全未知）。
+     *
+     * - 0：有目录规则（`ruleToc.chapterList` 非空）+ 有详情规则 —— 名片与目录都能出；
+     * - 1：只有目录规则 —— 详情名片可能缺字段，但目录能出，仍算可用；
+     * - 2：只有搜索规则 —— 详情/目录都空，当代表会让整组失效，排到最后。
+     *
+     * 排序稳定：同档内保持原相关性顺序，所以仅影响「谁当代表」，不打乱列表观感。
+     */
+    private fun ruleCompleteness(src: BookSource?): Int {
+        val hasToc = !src?.ruleToc?.chapterList.isNullOrBlank()
+        val hasInfo = src?.ruleBookInfo != null
+        return when {
+            hasToc && hasInfo -> 0
+            hasToc -> 1
+            else -> 2
+        }
     }
 
     /**

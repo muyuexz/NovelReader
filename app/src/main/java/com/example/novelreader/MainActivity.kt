@@ -73,6 +73,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.novelreader.analyzeRule.Book
 import com.example.novelreader.analyzeRule.BookChapter
+import com.example.novelreader.analyzeRule.ChapterResolver
 import com.example.novelreader.analyzeRule.ChapterStats
 import com.example.novelreader.analyzeRule.BookSource
 import com.example.novelreader.analyzeRule.BookSourceParser
@@ -247,12 +248,32 @@ private fun NovelApp(
         showReaderToc = false
         loadingToc = true
         scope.launch {
-            val list = withContext(Dispatchers.IO) {
-                val src = book.source
-                if (src == null) emptyList<BookChapter>() else runCatching {
-                    BookSourceEngine.getBookInfo(src, book)
-                    BookSourceEngine.getChapterList(src, book)
-                }.getOrDefault(emptyList())
+            // 第43批刀B（主刀）：不再只认 book.source 单源。把「代表源 + 全部兄弟源」
+            // 铺成候选集，限流并发竞速，首个解析出非空目录的源胜出（其详情字段已被回填）。
+            // 这直接治「32 源命中、却因代表源是残源而整组形同虚设」的结构性缺陷。
+            val candidates = listOf(book) + book.altSources
+            val res = ChapterResolver.resolve(
+                candidates = candidates,
+                concurrency = 6,
+                perCandidateTimeoutMs = 10_000L,
+            )
+            val winner = res?.book
+            val list = res?.chapters ?: emptyList()
+            // 胜出源若不是当前代表，把它的详情字段搬回代表书并静默顶替 ——
+            // 详情页名片、后续正文取数、书架刷新都跟着走这条真正能用的源，用户无感。
+            if (winner != null && winner !== book) {
+                if (winner.name.isNotBlank()) book.name = winner.name
+                if (winner.author.isNotBlank()) book.author = winner.author
+                if (!winner.intro.isNullOrBlank()) book.intro = winner.intro
+                if (!winner.coverUrl.isNullOrBlank()) book.coverUrl = winner.coverUrl
+                if (!winner.status.isNullOrBlank()) book.status = winner.status
+                if (!winner.kind.isNullOrBlank()) book.kind = winner.kind
+                if (!winner.wordCount.isNullOrBlank()) book.wordCount = winner.wordCount
+                if (winner.originName.isNotBlank()) book.originName = winner.originName
+                if (winner.origin.isNotBlank()) book.origin = winner.origin
+                book.source = winner.source
+                book.bookUrl = winner.bookUrl
+                if (winner.tocUrl.isNotBlank()) book.tocUrl = winner.tocUrl
             }
             chapters = list
             if (list.isNotEmpty()) {
@@ -261,7 +282,13 @@ private fun NovelApp(
                 book.chapterCount = ChapterStats.realChapterCount(list)
                 ChapterStats.lastRealChapter(list)?.title?.takeIf { it.isNotBlank() }?.let { book.lastChapter = it }
             }
-            if (list.isEmpty()) tocError = "目录解析为空（书源规则不匹配或网络失败）"
+            if (list.isEmpty()) {
+                tocError = if (candidates.size > 1) {
+                    "目录解析为空（已尝试 ${candidates.size} 个源）"
+                } else {
+                    "目录解析为空（书源规则不匹配或网络失败）"
+                }
+            }
             loadingToc = false
             // 详情拿到了就顺手刷进书架（不在书架里则无操作）
             val src = book.source
@@ -426,15 +453,33 @@ private fun NovelApp(
         showReaderToc = false
         loadingToc = true
         scope.launch {
-            val list = withContext(Dispatchers.IO) {
-                runCatching {
-                    BookSourceEngine.getBookInfo(src, nb)
-                    BookSourceEngine.getChapterList(src, nb)
-                }.getOrDefault(emptyList())
+            // 第43批刀B：阅读页换源同样走多源竞速 —— 用户指定的 nb 优先，
+            // 它不出目录时自动在兄弟源里兜底，不让「换源失败」再逼用户手点一次。
+            val candidates = listOf(nb) + nb.altSources
+            val res = ChapterResolver.resolve(
+                candidates = candidates,
+                concurrency = 6,
+                perCandidateTimeoutMs = 10_000L,
+            )
+            val winner = res?.book
+            val list = res?.chapters ?: emptyList()
+            if (winner != null && winner !== nb) {
+                if (winner.name.isNotBlank()) nb.name = winner.name
+                if (winner.author.isNotBlank()) nb.author = winner.author
+                if (!winner.intro.isNullOrBlank()) nb.intro = winner.intro
+                if (!winner.coverUrl.isNullOrBlank()) nb.coverUrl = winner.coverUrl
+                if (!winner.status.isNullOrBlank()) nb.status = winner.status
+                if (!winner.kind.isNullOrBlank()) nb.kind = winner.kind
+                if (!winner.wordCount.isNullOrBlank()) nb.wordCount = winner.wordCount
+                if (winner.originName.isNotBlank()) nb.originName = winner.originName
+                if (winner.origin.isNotBlank()) nb.origin = winner.origin
+                nb.source = winner.source
+                nb.bookUrl = winner.bookUrl
+                if (winner.tocUrl.isNotBlank()) nb.tocUrl = winner.tocUrl
             }
             chapters = list
             if (list.isEmpty()) {
-                tocError = "换源失败：目录解析为空（书源规则不匹配或网络失败）"
+                tocError = "换源失败：目录解析为空（已尝试 ${candidates.size} 个源）"
                 loadingToc = false
                 return@launch
             }
@@ -447,7 +492,7 @@ private fun NovelApp(
                 ?: list.first()
             loadChapter(target)
             withContext(Dispatchers.IO) {
-                runCatching { ShelfRepository.refreshMeta(context, nb, src.bookSourceUrl) }
+                runCatching { ShelfRepository.refreshMeta(context, nb, nb.source?.bookSourceUrl ?: src.bookSourceUrl) }
             }
             withContext(Dispatchers.Main) { refreshShelf() }
         }
@@ -630,6 +675,8 @@ private fun NovelApp(
                     }
                 },
             onRetry = { openBook(openBookNow) },
+            // 第43批刀C：详情页失败态「换个源试试」→ 复用阅读页 switchSource 换源链路。
+            onSwitchSource = switchSource,
         )
 
         openBookNow != null -> TocScreen(

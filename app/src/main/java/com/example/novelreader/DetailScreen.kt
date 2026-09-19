@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -59,8 +60,11 @@ fun DetailScreen(
     onToggleShelf: () -> Unit,
     onRead: () -> Unit,
     onRetry: () -> Unit,
+    onSwitchSource: (Book) -> Unit,
 ) {
     val scroll = rememberScrollState()
+    // 第43批刀C：详情页失败态「换个源试试」的源列表弹窗开关。
+    val showSourcePicker = remember { mutableStateOf(false) }
     val lastChapter = book.lastChapter?.takeIf { it.isNotBlank() }
     val intro = remember(book.intro) {
         book.intro
@@ -199,7 +203,13 @@ fun DetailScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )
-                TextButton(onClick = onRetry) { Text("重试") }
+                Row {
+                    TextButton(onClick = onRetry) { Text("重试") }
+                    // 第43批刀C：代表源失败时给一条人工换源入口，展开命中该书的全部兄弟源。
+                    if (book.altSources.isNotEmpty()) {
+                        TextButton(onClick = { showSourcePicker.value = true }) { Text("换个源试试") }
+                    }
+                }
             }
 
             // —— 简介 ——
@@ -215,8 +225,33 @@ fun DetailScreen(
             Spacer(Modifier.height(30.dp))
         }
     }
+    // 第43批刀C：源选择弹窗 —— 列出「代表源 + 兄弟源」，选中即交给上层走 switchSource 换源链路。
+    if (showSourcePicker.value) {
+        val pickList = listOf(book) + book.altSources
+        AlertDialog(
+            onDismissRequest = { showSourcePicker.value = false },
+            title = { Text("换个源试试") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    pickList.forEach { s ->
+                        TextButton(
+                            onClick = {
+                                showSourcePicker.value = false
+                                onSwitchSource(s)
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(s.originName.takeIf { it.isNotBlank() } ?: "未知来源")
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showSourcePicker.value = false }) { Text("取消") }
+            },
+        )
+    }
 }
-
 /**
  * 状态兜底（第 2 条）：书源未给 status 时，从分类/简介里嗅「完结 / 连载」字样推断，
  * 总比一律显示「未知」有信息量。
